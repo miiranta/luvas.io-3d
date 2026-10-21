@@ -92,6 +92,16 @@
         display: contents;
     }
 
+    /* Object / Room are the two ways to scan; the advice below applies to both. */
+    .divider {
+        display: block;
+        grid-column: 1 / -1;
+        height: 2px;
+        margin: 0.15rem 0;
+        border-radius: 1px;
+        background: var(--line);
+    }
+
     b {
         color: var(--accent);
     }
