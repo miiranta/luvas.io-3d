@@ -1,0 +1,30 @@
+@if (showModel()) {
+    <app-model-viewer
+        (openInsights)="openSheet('insights')"
+        (openExport)="openSheet('export')"
+        (requestReset)="askingReset.set(true)"
+    />
+    <app-pipeline-track />
+} @else {
+    <app-capture-stage />
+}
+
+@if (sheet() === 'insights') {
+    <app-insights-sheet (close)="openSheet('none')" />
+}
+
+@if (sheet() === 'export') {
+    <app-export-sheet (close)="openSheet('none')" />
+}
+
+@if (askingReset()) {
+    <app-confirm-dialog
+        message="Start a new scan?"
+        [detail]="resetDetail()"
+        confirmLabel="New scan"
+        (confirmed)="confirmReset()"
+        (dismissed)="askingReset.set(false)"
+    />
+}
+
+<app-busy-veil />

@@ -1,0 +1,125 @@
+@use 'layers';
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgb(9 5 22 / 60%);
+    backdrop-filter: blur(2px);
+    z-index: layers.$sheet-backdrop;
+}
+
+.sheet {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: layers.$sheet;
+    width: min(92vw, 340px);
+    display: flex;
+    flex-direction: column;
+    background: rgb(27 18 53 / 96%);
+    border-right: 4px solid var(--outline);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    backdrop-filter: blur(16px);
+}
+
+header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.85rem 0.9rem;
+    border-bottom: 3px solid var(--outline);
+
+    h2 {
+        flex: 1;
+        font-size: 0.8rem;
+    }
+}
+
+.body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.8rem 0.9rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+}
+
+dl {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 0;
+
+    div {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.6rem;
+        font-size: 0.74rem;
+    }
+
+    dt {
+        color: var(--text-dim);
+    }
+
+    dd {
+        margin: 0;
+        font-family: var(--mono);
+        text-align: right;
+        word-break: break-word;
+    }
+}
+
+.bad {
+    color: var(--bad);
+}
+
+.bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.bar {
+    display: grid;
+    grid-template-columns: 118px 1fr 38px;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+
+    .track {
+        height: 5px;
+        border-radius: 3px;
+        background: var(--bg-input);
+        overflow: hidden;
+    }
+
+    .fill {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+    }
+
+    b {
+        font-family: var(--mono);
+        color: var(--text);
+        text-align: right;
+    }
+}
+
+.empty {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+}
+
+h3 {
+    margin-top: 0.2rem;
+}
+
+.note {
+    margin: 0;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}

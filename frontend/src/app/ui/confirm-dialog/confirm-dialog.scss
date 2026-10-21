@@ -1,0 +1,54 @@
+@use 'layers';
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: layers.$dialog-backdrop;
+    background: rgb(9 5 22 / 66%);
+    backdrop-filter: blur(3px);
+}
+
+.dialog {
+    position: fixed;
+    z-index: layers.$dialog;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(88vw, 320px);
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    padding: 1.1rem;
+    border-radius: 14px;
+    background: rgb(42 28 77 / 97%);
+    border: 4px solid var(--outline);
+    box-shadow: var(--pop-lg);
+}
+
+.message {
+    margin: 0;
+    font-size: 0.92rem;
+    font-weight: 600;
+}
+
+.detail {
+    margin: 0;
+    font-size: 0.76rem;
+    color: var(--text-dim);
+}
+
+.actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+
+    button {
+        font-size: 0.8rem;
+        padding: 0.4rem 0.8rem;
+    }
+
+    .danger {
+        color: #2b0010;
+        background: var(--bad);
+    }
+}

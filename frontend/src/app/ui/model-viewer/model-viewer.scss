@@ -1,0 +1,128 @@
+@use 'layers';
+
+:host {
+    display: contents;
+}
+
+.view {
+    position: fixed;
+    inset: 0;
+    z-index: layers.$feed;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    touch-action: none;
+    background: var(--bg);
+}
+
+.hud {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: layers.$hud;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.8rem;
+}
+
+.spacer {
+    flex: 1;
+}
+
+.save:not(:disabled) {
+    color: #2b1a00;
+    background: var(--accent-soft);
+}
+
+.toast {
+    position: fixed;
+    z-index: layers.$toast;
+    left: 50%;
+    bottom: 6.6rem;
+    transform: translateX(-50%);
+}
+
+.hint {
+    position: fixed;
+    z-index: layers.$toast;
+    left: 50%;
+    bottom: 6.2rem;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: 88vw;
+    margin: 0;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.74rem;
+    background: rgb(13 8 32 / 88%);
+    border: 3px solid var(--outline);
+    border-radius: var(--radius-sm);
+}
+
+.measure {
+    position: fixed;
+    z-index: layers.$tracks;
+    transform: translate(-50%, -150%);
+    padding: 0.1rem 0.55rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: #2b1a00;
+    background: var(--accent);
+    border: 3px solid var(--outline);
+    border-radius: 999px;
+    box-shadow: var(--pop);
+    pointer-events: none;
+}
+
+.dock {
+    position: fixed;
+    z-index: layers.$dock;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.7rem;
+    padding: 1rem 1rem 1.5rem;
+}
+
+.icon.on {
+    color: #2b1a00;
+    background: var(--accent);
+}
+
+.segmented {
+    display: flex;
+    padding: 4px;
+    gap: 4px;
+    background: rgb(23 16 46 / 94%);
+    border: 3px solid var(--outline);
+    border-radius: 999px;
+    box-shadow: var(--pop);
+
+    button {
+        padding: 0.42rem 0.85rem;
+        font-size: 0.82rem;
+        border-width: 2px;
+        border-radius: 999px;
+        box-shadow: none;
+        background: transparent;
+        color: var(--text-dim);
+
+        &.on {
+            color: #2b1a00;
+            background: var(--accent);
+            box-shadow: 0 3px 0 var(--outline);
+        }
+
+        &:hover:not(:disabled) {
+            box-shadow: none;
+        }
+
+        &.on:hover:not(:disabled) {
+            box-shadow: 0 3px 0 var(--outline);
+        }
+    }
+}

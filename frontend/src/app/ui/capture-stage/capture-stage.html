@@ -1,0 +1,148 @@
+@if (!active()) {
+    <section class="start">
+        <div class="brand">
+            <span class="cube" aria-hidden="true">
+                <svg viewBox="0 0 48 48" width="56" height="56">
+                    <path
+                        d="M24 5.5l16 9.2v18.6L24 42.5 8 33.3V14.7z"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="3.4"
+                        stroke-linejoin="round"
+                    />
+                    <path
+                        d="M8 14.7l16 9.2 16-9.2M24 23.9v18.6"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="3.4"
+                        stroke-linejoin="round"
+                    />
+                </svg>
+            </span>
+            <h1>Scan 3D</h1>
+            <p>
+                Record a slow walk around an object or a room. The phone tracks where it is; the
+                frames become a textured 3D model, built right here on the device.
+            </p>
+        </div>
+
+        <button type="button" class="open" [disabled]="!canStart()" (click)="start()">
+            <span class="lens"></span>
+            {{ starting() ? 'Starting AR…' : 'Start scan' }}
+        </button>
+
+        @if (blocker() || notice(); as message) {
+            <p class="toast">{{ message }}</p>
+        }
+
+        <ul class="tips">
+            <li>
+                <span class="badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                        <ellipse
+                            cx="12"
+                            cy="13"
+                            rx="9"
+                            ry="4.2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                        />
+                        <circle cx="12" cy="9" r="3.2" fill="currentColor" />
+                    </svg>
+                </span>
+                <b>Object</b>
+                <span>circle it twice, low then high</span>
+            </li>
+            <li>
+                <span class="badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                        <path
+                            d="M4 19V8.5L12 4l8 4.5V19M9 19v-5h6v5"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linejoin="round"
+                        />
+                    </svg>
+                </span>
+                <b>Room</b>
+                <span>walk the walls, end where you began</span>
+            </li>
+            <li>
+                <span class="badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="18" height="18">
+                        <circle
+                            cx="12"
+                            cy="12"
+                            r="8.5"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                        />
+                        <path
+                            d="M12 7.5V12l3 2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="2.2"
+                            stroke-linecap="round"
+                        />
+                    </svg>
+                </span>
+                <b>Slowly</b>
+                <span>no glass, mirrors or blank walls</span>
+            </li>
+        </ul>
+    </section>
+}
+
+<div #overlay class="overlay" [class.shown]="active()">
+    <div class="hud">
+        <span class="chip" [class.rec]="recording()">
+            @if (recording()) {
+                <i class="dot"></i>
+                <b>{{ elapsed() }}</b>
+            } @else {
+                ready
+            }
+        </span>
+        <span class="chip">
+            <b>{{ keyframes() }}</b> keyframes
+            @if (rejected() > 0) {
+                <i>· {{ rejected() }} blurred</i>
+            }
+        </span>
+        <span class="chip"
+            ><b>{{ points() }}</b> points</span
+        >
+        @if (depthSensing()) {
+            <span class="chip dim">depth</span>
+        }
+    </div>
+
+    <p class="hint" [class.warn]="tooFast() || tracking() !== 'ok'">{{ hint() }}</p>
+
+    <div class="dock">
+        <button type="button" class="icon close" title="Close without building" (click)="cancel()">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path
+                    d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.8"
+                    stroke-linecap="round"
+                />
+            </svg>
+        </button>
+        <button
+            type="button"
+            class="shutter"
+            [class.recording]="recording()"
+            [disabled]="!recording() && tracking() === 'lost'"
+            [title]="recording() ? 'Stop and build the model' : 'Start recording'"
+            (click)="toggleRecording()"
+        >
+            <span class="mark"></span>
+        </button>
+    </div>
+</div>

@@ -1,0 +1,221 @@
+@use 'layers';
+
+:host {
+    position: fixed;
+    z-index: layers.$minimap;
+    top: 4.3rem;
+    left: 0.8rem;
+    width: min(calc(100vw - 1.6rem), 310px);
+}
+
+.track {
+    background: rgb(27 18 53 / 94%);
+    border: 3px solid var(--outline);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--pop);
+    backdrop-filter: blur(8px);
+    overflow: hidden;
+}
+
+.head {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.78rem;
+    text-align: left;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+
+    &:hover:not(:disabled),
+    &:active:not(:disabled) {
+        transform: none;
+        box-shadow: none;
+    }
+}
+
+.open .head {
+    border-bottom: 3px solid var(--outline);
+}
+
+.title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.count {
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    color: var(--text-dim);
+}
+
+.total {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--accent);
+}
+
+.chevron {
+    color: var(--text-dim);
+    transition: transform 140ms ease;
+}
+
+.open .chevron {
+    transform: rotate(180deg);
+}
+
+.state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    font-style: normal;
+    font-size: 0.7rem;
+    color: #04240f;
+    background: var(--good-strong);
+    border: 2px solid var(--outline);
+    border-radius: 50%;
+
+    &.bad {
+        color: #2b0010;
+        background: var(--bad);
+    }
+}
+
+ol {
+    margin: 0;
+    padding: 0.35rem 0.55rem 0.45rem;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+li {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    align-items: center;
+    column-gap: 0.45rem;
+    padding: 0.18rem 0.15rem;
+    font-size: 0.74rem;
+    color: var(--text-dim);
+    border-radius: 8px;
+
+    &.running {
+        color: var(--text);
+        background: rgb(255 201 60 / 9%);
+    }
+
+    &.done {
+        color: var(--text);
+    }
+
+    &.failed {
+        color: var(--bad);
+    }
+}
+
+.mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-family: var(--mono);
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    border: 2px solid var(--line);
+    border-radius: 50%;
+
+    .done & {
+        color: var(--outline);
+        background: var(--accent);
+        border-color: var(--outline);
+    }
+
+    .running & {
+        border-color: transparent;
+    }
+
+    .failed & {
+        color: #2b0010;
+        background: var(--bad);
+        border-color: var(--outline);
+    }
+}
+
+.name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+
+    small {
+        font-size: 0.62rem;
+        color: var(--text-dim);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+}
+
+.time {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+
+    .running & {
+        color: var(--accent);
+    }
+}
+
+.bar {
+    grid-column: 2 / 4;
+    height: 4px;
+    margin-top: 0.2rem;
+    border-radius: 2px;
+    background: var(--bg-input);
+    overflow: hidden;
+
+    span {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        transition: width 180ms ease;
+    }
+}
+
+.sum {
+    margin: 0;
+    padding: 0.3rem 0.7rem 0.45rem;
+    font-size: 0.66rem;
+    color: var(--text-dim);
+    border-top: 2px solid var(--line);
+
+    b {
+        font-family: var(--mono);
+        color: var(--text);
+    }
+}
+
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2.5px solid rgb(255 201 60 / 25%);
+    border-top-color: var(--accent);
+    animation: track-spin 720ms linear infinite;
+}
+
+@keyframes track-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

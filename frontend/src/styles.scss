@@ -1,0 +1,224 @@
+:root {
+    --bg: #1b1235;
+    --bg-raised: #2a1c4d;
+    --bg-input: #17102e;
+    --line: #43307a;
+    --line-strong: #5b41a0;
+    --outline: #0d0820;
+    --text: #fdf6ff;
+    --text-dim: #b3a2d8;
+    --accent: #ffc93c;
+    --accent-soft: #ff9f1c;
+    --warn: #ff7a1c;
+    --bad: #ff5d8f;
+    --good: #ffc93c;
+    --good-strong: #5ddc7a;
+    --radius: 20px;
+    --radius-sm: 14px;
+    --pop: 0 5px 0 var(--outline);
+    --pop-lg: 0 7px 0 var(--outline), 0 16px 34px rgb(6 3 18 / 58%);
+    --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Baloo 2', 'Segoe UI Rounded', 'Nunito', 'Trebuchet MS', system-ui, sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+    margin: 0;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+}
+
+h2 {
+    font-size: 1rem;
+}
+
+h3 {
+    font-size: 0.72rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+button {
+    font: inherit;
+    font-weight: 700;
+    border: 3px solid var(--outline);
+    background: var(--bg-raised);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 0.45rem 0.85rem;
+    cursor: pointer;
+    box-shadow: var(--pop);
+    transition:
+        transform 90ms ease,
+        box-shadow 90ms ease,
+        background 120ms ease;
+
+    &:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 0 var(--outline);
+    }
+
+    &:active:not(:disabled) {
+        transform: translateY(4px);
+        box-shadow: 0 1px 0 var(--outline);
+    }
+
+    &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        box-shadow: 0 2px 0 var(--outline);
+    }
+
+    &.ghost {
+        background: var(--bg-input);
+        color: var(--text-dim);
+    }
+}
+
+svg {
+    display: block;
+    flex: none;
+}
+
+select {
+    font: inherit;
+    font-weight: 700;
+    background: var(--bg-input);
+    color: var(--text);
+    border: 3px solid var(--accent-soft);
+    border-radius: var(--radius-sm);
+    padding: 0.3rem 0.5rem;
+    box-shadow: var(--pop);
+}
+
+input[type='range'] {
+    width: 100%;
+    height: 22px;
+    accent-color: var(--accent-soft);
+}
+
+canvas {
+    display: block;
+    max-width: 100%;
+}
+
+.error {
+    margin: 0;
+    color: var(--bad);
+    font-size: 0.85rem;
+}
+
+.round-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 50%;
+
+    &.close {
+        color: #2b0010;
+        background: var(--bad);
+    }
+
+    &.save {
+        color: #2b1a00;
+        background: var(--accent-soft);
+    }
+
+    &.working {
+        background: var(--warn);
+    }
+}
+
+.card-actions {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.55rem;
+    z-index: 1;
+    display: flex;
+    gap: 0.45rem;
+}
+
+/* Shared HUD pieces (capture overlay and model viewer). */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.78rem;
+    color: var(--text);
+    background: rgb(42 28 77 / 92%);
+    border: 3px solid var(--outline);
+    border-radius: 999px;
+    padding: 0.16rem 0.65rem;
+    box-shadow: var(--pop);
+
+    b {
+        color: var(--accent);
+    }
+
+    i {
+        font-style: normal;
+        color: var(--text-dim);
+    }
+
+    &.dim {
+        color: var(--text-dim);
+    }
+
+    &.rec {
+        background: rgb(214 51 108 / 94%);
+
+        b {
+            color: #fff1f6;
+        }
+    }
+}
+
+.icon {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--text);
+    background: rgb(42 28 77 / 94%);
+}
+
+.toast {
+    max-width: min(92vw, 380px);
+    margin: 0;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.8rem;
+    color: #fff1f6;
+    background: rgb(214 51 108 / 94%);
+    border: 3px solid var(--outline);
+    border-radius: var(--radius);
+    box-shadow: var(--pop);
+}

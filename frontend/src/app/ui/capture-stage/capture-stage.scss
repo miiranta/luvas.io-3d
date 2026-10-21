@@ -1,0 +1,229 @@
+@use 'layers';
+
+:host {
+    display: contents;
+}
+
+.start {
+    position: fixed;
+    inset: 0;
+    z-index: layers.$hud;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.4rem;
+    padding: 1.5rem 1.2rem;
+    text-align: center;
+    background:
+        radial-gradient(circle at 50% 30%, rgb(91 65 160 / 45%), transparent 60%), var(--bg);
+}
+
+.brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    max-width: 340px;
+
+    h1 {
+        font-size: 1.9rem;
+        line-height: 1;
+    }
+
+    p {
+        margin: 0;
+        font-size: 0.86rem;
+        color: var(--text-dim);
+    }
+}
+
+.cube {
+    display: inline-flex;
+    padding: 0.55rem;
+    color: var(--accent);
+    background: var(--bg-raised);
+    border: 4px solid var(--outline);
+    border-radius: var(--radius);
+    box-shadow: var(--pop-lg);
+}
+
+.open {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 1.25rem 0.7rem 0.8rem;
+    font-size: 1.05rem;
+    color: #2b1a00;
+    background: var(--accent);
+    border-width: 4px;
+    border-radius: 999px;
+    box-shadow: var(--pop-lg);
+}
+
+.lens {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 4px solid var(--outline);
+    background: #fffdf5;
+    box-shadow: inset 0 0 0 4px rgb(255 159 28 / 55%);
+}
+
+.tips {
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    list-style: none;
+    display: grid;
+    grid-template-columns: 30px auto 1fr;
+    align-items: center;
+    gap: 0.45rem 0.55rem;
+    width: min(100%, 320px);
+    text-align: left;
+    font-size: 0.78rem;
+    line-height: 1.25;
+    color: var(--text-dim);
+    background: rgb(42 28 77 / 72%);
+    border: 3px solid var(--outline);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--pop);
+
+    li {
+        display: contents;
+    }
+
+    b {
+        color: var(--accent);
+    }
+}
+
+.start .toast {
+    width: min(100%, 320px);
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 2px solid var(--outline);
+    border-radius: 50%;
+}
+
+/* DOM overlay shown over the camera during the AR session. */
+.overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: layers.$hud;
+    background: transparent;
+    pointer-events: none;
+
+    &.shown,
+    &:xr-overlay {
+        display: block;
+    }
+
+    button {
+        pointer-events: auto;
+    }
+}
+
+.hud {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.8rem;
+}
+
+.dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #fff1f6;
+    animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+    to {
+        visibility: hidden;
+    }
+}
+
+.hint {
+    position: absolute;
+    left: 50%;
+    bottom: 7.4rem;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(88vw, 360px);
+    margin: 0;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.76rem;
+    text-align: center;
+    color: var(--text);
+    background: rgb(13 8 32 / 86%);
+    border: 3px solid var(--outline);
+    border-radius: var(--radius-sm);
+
+    &.warn {
+        color: var(--outline);
+        background: var(--warn);
+    }
+}
+
+.dock {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem 1.1rem 1.5rem;
+}
+
+.close {
+    position: absolute;
+    left: 1.1rem;
+}
+
+.shutter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 76px;
+    height: 76px;
+    padding: 0;
+    border-radius: 50%;
+    border: 6px solid var(--outline);
+    background: #fffdf5;
+    box-shadow:
+        0 6px 0 var(--outline),
+        0 0 0 9px rgb(27 18 53 / 55%);
+
+    .mark {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: var(--bad);
+        border: 3px solid var(--outline);
+        transition:
+            border-radius 140ms ease,
+            transform 140ms ease;
+    }
+
+    &.recording .mark {
+        border-radius: 7px;
+        transform: scale(0.85);
+    }
+}

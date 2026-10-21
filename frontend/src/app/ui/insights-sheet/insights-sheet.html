@@ -1,0 +1,59 @@
+<div class="backdrop" (click)="close.emit()"></div>
+
+<section class="sheet">
+    <header>
+        <h2>Diagnostics</h2>
+        <button type="button" class="round-action close" title="Close" (click)="close.emit()">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path
+                    d="M6.5 6.5l11 11M17.5 6.5l-11 11"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.8"
+                    stroke-linecap="round"
+                />
+            </svg>
+        </button>
+    </header>
+
+    <div class="body">
+        @for (section of sections(); track section.title) {
+            <h3>{{ section.title }}</h3>
+            <dl>
+                @for (row of section.rows; track row.label) {
+                    <div>
+                        <dt>{{ row.label }}</dt>
+                        <dd>{{ row.value }}</dd>
+                    </div>
+                }
+            </dl>
+        } @empty {
+            <p class="empty">
+                @if (stage()) {
+                    Working: {{ stage() }}. The numbers appear when the model is finished.
+                } @else {
+                    {{ keyframes() }} keyframes so far. The numbers appear when the model is
+                    finished.
+                }
+            </p>
+        }
+
+        @if (timings(); as stages) {
+            <h3>time per stage (s)</h3>
+            <div class="bars">
+                @for (stage of stages; track stage.name) {
+                    <div class="bar">
+                        <span>{{ stage.name }}</span>
+                        <span class="track"
+                            ><span class="fill" [style.width.%]="stage.share"></span
+                        ></span>
+                        <b>{{ stage.seconds }}</b>
+                    </div>
+                }
+            </div>
+            <p class="note">
+                Reprojection is shown as mean / median in pixels of the stereo image.
+            </p>
+        }
+    </div>
+</section>

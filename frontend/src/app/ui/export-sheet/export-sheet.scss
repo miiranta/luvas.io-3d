@@ -1,0 +1,66 @@
+@use 'layers';
+
+.backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: layers.$dialog-backdrop;
+    background: rgb(9 5 22 / 66%);
+    backdrop-filter: blur(3px);
+}
+
+.dialog {
+    position: fixed;
+    z-index: layers.$dialog;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(92vw, 360px);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.9rem;
+    border-radius: var(--radius);
+    background: rgb(42 28 77 / 97%);
+    border: 4px solid var(--outline);
+    box-shadow: var(--pop-lg);
+}
+
+header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0 0.2rem 0.2rem;
+
+    h2 {
+        font-size: 0.9rem;
+    }
+}
+
+.choice {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    text-align: left;
+    background: var(--bg-input);
+
+    b {
+        color: var(--accent);
+        font-size: 0.86rem;
+    }
+
+    span {
+        font-size: 0.72rem;
+        font-weight: 600;
+        color: var(--text-dim);
+    }
+
+    &.working {
+        background: var(--warn);
+
+        b,
+        span {
+            color: var(--outline);
+        }
+    }
+}

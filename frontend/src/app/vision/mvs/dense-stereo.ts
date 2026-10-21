@@ -1,0 +1,261 @@
+import { Intrinsics, Pose, relativePose } from '../geometry/camera';
+import {
+    BufferUsage,
+    ShaderStage,
+    TextureUsage,
+    readBuffer,
+    storageBuffer,
+} from '../gpu/gpu-device';
+import { PATCHMATCH_WGSL } from './patchmatch.wgsl';
+
+export interface StereoView {
+    intrinsics: Intrinsics;
+    pose: Pose;
+}
+
+export interface SolveOptions {
+    sources: number[];
+    minDepth: number;
+    maxDepth: number;
+    /** Depth guess per pixel (0 = none), e.g. from the phone's depth sensor. */
+    prior: Float32Array | null;
+    /** Second pass: adds the geometric-consistency term and starts from the first pass. */
+    geometric: boolean;
+    iterations: number;
+}
+
+const MAX_SOURCES = 8;
+const SLOT_BYTES = 768;
+const MAX_SLOTS = 32;
+const GEOMETRIC_WEIGHT = 0.2;
+
+/**
+ * GPU PatchMatch for every keyframe. All gray images live in one texture array and all packed
+ * depth maps (u32 per pixel) in one storage buffer, so the geometric pass and the consistency
+ * filter can read any neighbour without copies.
+ */
+export class DenseStereo {
+    private readonly images: GPUTexture;
+    private readonly depths: GPUBuffer;
+    private readonly hyp: GPUBuffer;
+    private readonly cost: GPUBuffer;
+    private readonly prior: GPUBuffer;
+    readonly filtered: GPUBuffer;
+    private readonly uniforms: GPUBuffer;
+    private readonly bindGroup: GPUBindGroup;
+    private readonly pipelines: Record<
+        'init' | 'propagate' | 'pack' | 'consistency',
+        GPUComputePipeline
+    >;
+    private readonly zeros: Float32Array;
+
+    constructor(
+        private readonly device: GPUDevice,
+        readonly width: number,
+        readonly height: number,
+        private readonly views: StereoView[],
+        grays: Uint8Array[],
+    ) {
+        const pixels = width * height;
+        this.zeros = new Float32Array(pixels);
+        this.images = device.createTexture({
+            label: 'stereo images',
+            size: { width, height, depthOrArrayLayers: Math.max(1, views.length) },
+            format: 'r8unorm',
+            usage: TextureUsage.TEXTURE_BINDING | TextureUsage.COPY_DST,
+        });
+        grays.forEach((gray, layer) =>
+            device.queue.writeTexture(
+                { texture: this.images, origin: { x: 0, y: 0, z: layer } },
+                gray as Uint8Array<ArrayBuffer>,
+                { bytesPerRow: width, rowsPerImage: height },
+                { width, height, depthOrArrayLayers: 1 },
+            ),
+        );
+        this.depths = storageBuffer(device, views.length * pixels * 4, 'depth maps');
+        this.hyp = storageBuffer(device, pixels * 16, 'hypotheses');
+        this.cost = storageBuffer(device, pixels * 4, 'costs');
+        this.prior = storageBuffer(device, pixels * 4, 'prior');
+        this.filtered = storageBuffer(device, pixels * 4, 'filtered');
+        this.uniforms = device.createBuffer({
+            label: 'stereo params',
+            size: SLOT_BYTES * MAX_SLOTS,
+            usage: BufferUsage.UNIFORM | BufferUsage.COPY_DST,
+        });
+
+        const storage = (binding: number, readOnly = false): GPUBindGroupLayoutEntry => ({
+            binding,
+            visibility: ShaderStage.COMPUTE,
+            buffer: { type: readOnly ? 'read-only-storage' : 'storage' },
+        });
+        const layout = device.createBindGroupLayout({
+            entries: [
+                {
+                    binding: 0,
+                    visibility: ShaderStage.COMPUTE,
+                    texture: { sampleType: 'float', viewDimension: '2d-array' },
+                },
+                { binding: 1, visibility: ShaderStage.COMPUTE, sampler: { type: 'filtering' } },
+                {
+                    binding: 2,
+                    visibility: ShaderStage.COMPUTE,
+                    buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 704 },
+                },
+                storage(3),
+                storage(4),
+                storage(5, true),
+                storage(6),
+                storage(7),
+            ],
+        });
+        this.bindGroup = device.createBindGroup({
+            layout,
+            entries: [
+                { binding: 0, resource: this.images.createView({ dimension: '2d-array' }) },
+                {
+                    binding: 1,
+                    resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
+                },
+                { binding: 2, resource: { buffer: this.uniforms, size: 704 } },
+                { binding: 3, resource: { buffer: this.hyp } },
+                { binding: 4, resource: { buffer: this.cost } },
+                { binding: 5, resource: { buffer: this.prior } },
+                { binding: 6, resource: { buffer: this.depths } },
+                { binding: 7, resource: { buffer: this.filtered } },
+            ],
+        });
+        const module = device.createShaderModule({ label: 'patchmatch', code: PATCHMATCH_WGSL });
+        const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+        const make = (entryPoint: string) =>
+            device.createComputePipeline({
+                label: entryPoint,
+                layout: pipelineLayout,
+                compute: { module, entryPoint },
+            });
+        this.pipelines = {
+            init: make('init'),
+            propagate: make('propagate'),
+            pack: make('pack'),
+            consistency: make('consistency'),
+        };
+    }
+
+    /** Runs PatchMatch for one reference view and stores its packed depth map. */
+    async solve(ref: number, options: SolveOptions): Promise<void> {
+        const sources = options.sources.slice(0, MAX_SOURCES);
+        if (sources.length === 0) return;
+        this.device.queue.writeBuffer(this.prior, 0, options.prior ?? this.zeros);
+        const slots: ArrayBuffer[] = [];
+        const flags = options.geometric ? 1 : 0;
+        slots.push(this.params(ref, sources, options, 0, 0, 1, flags));
+        for (let iteration = 0; iteration < options.iterations; iteration++) {
+            const step = Math.pow(0.5, iteration);
+            for (const phase of [0, 1]) {
+                slots.push(this.params(ref, sources, options, iteration, phase, step, flags));
+            }
+        }
+        const data = new Uint8Array(slots.length * SLOT_BYTES);
+        slots.forEach((slot, i) => data.set(new Uint8Array(slot), i * SLOT_BYTES));
+        this.device.queue.writeBuffer(this.uniforms, 0, data);
+
+        const encoder = this.device.createCommandEncoder();
+        const pass = encoder.beginComputePass();
+        const gx = Math.ceil(this.width / 8);
+        const gy = Math.ceil(this.height / 8);
+        pass.setPipeline(this.pipelines.init);
+        pass.setBindGroup(0, this.bindGroup, [0]);
+        pass.dispatchWorkgroups(gx, gy);
+        pass.setPipeline(this.pipelines.propagate);
+        for (let slot = 1; slot < slots.length; slot++) {
+            pass.setBindGroup(0, this.bindGroup, [slot * SLOT_BYTES]);
+            pass.dispatchWorkgroups(Math.ceil(this.width / 16), gy);
+        }
+        pass.setPipeline(this.pipelines.pack);
+        pass.setBindGroup(0, this.bindGroup, [0]);
+        pass.dispatchWorkgroups(Math.ceil((this.width * this.height) / 64));
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
+        await this.device.queue.onSubmittedWorkDone();
+    }
+
+    /** Multi-view consistency check into `filtered` (left on the GPU). */
+    encodeFilter(encoder: GPUCommandEncoder, ref: number, sources: number[]): void {
+        const slot = this.params(
+            ref,
+            sources.slice(0, MAX_SOURCES),
+            { minDepth: 0.01, maxDepth: 100 },
+            0,
+            0,
+            0,
+            0,
+        );
+        this.device.queue.writeBuffer(this.uniforms, 0, slot);
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.pipelines.consistency);
+        pass.setBindGroup(0, this.bindGroup, [0]);
+        pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8));
+        pass.end();
+    }
+
+    /** Filtered packed depth map of one view, read back to the CPU. */
+    async filteredMap(ref: number, sources: number[]): Promise<Uint32Array> {
+        const encoder = this.device.createCommandEncoder();
+        this.encodeFilter(encoder, ref, sources);
+        this.device.queue.submit([encoder.finish()]);
+        return new Uint32Array(
+            await readBuffer(this.device, this.filtered, this.width * this.height * 4),
+        );
+    }
+
+    /** Raw packed depth map of one view (before the consistency filter). */
+    async depthMap(ref: number): Promise<Uint32Array> {
+        const bytes = this.width * this.height * 4;
+        return new Uint32Array(await readBuffer(this.device, this.depths, bytes, ref * bytes));
+    }
+
+    private params(
+        ref: number,
+        sources: number[],
+        range: { minDepth: number; maxDepth: number },
+        iteration: number,
+        phase: number,
+        step: number,
+        flags: number,
+    ): ArrayBuffer {
+        const buffer = new ArrayBuffer(SLOT_BYTES);
+        const f = new Float32Array(buffer);
+        const u = new Uint32Array(buffer);
+        const reference = this.views[ref];
+        const k = reference.intrinsics;
+        f.set([k.fx, k.fy, k.cx, k.cy], 0);
+        u.set([this.width, this.height, ref, sources.length], 4);
+        f.set([1 / range.minDepth, 1 / range.maxDepth, step, GEOMETRIC_WEIGHT], 8);
+        // Deterministic seed per dispatch so that runs are reproducible.
+        const seed = Math.imul(ref + 1, 0x9e3779b1) + iteration * 97 + phase * 13 + flags * 7;
+        u.set([iteration, phase, seed >>> 0, flags], 12);
+        sources.forEach((source, s) => {
+            const view = this.views[source];
+            const { R, t } = relativePose(reference.pose, view.pose);
+            const o = 16 + s * 20;
+            const ks = view.intrinsics;
+            f.set([ks.fx, ks.fy, ks.cx, ks.cy], o);
+            f.set([R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0], o + 4);
+            f.set([t[0], t[1], t[2], source], o + 16);
+        });
+        return buffer;
+    }
+
+    destroy(): void {
+        this.images.destroy();
+        for (const buffer of [
+            this.depths,
+            this.hyp,
+            this.cost,
+            this.prior,
+            this.filtered,
+            this.uniforms,
+        ]) {
+            buffer.destroy();
+        }
+    }
+}

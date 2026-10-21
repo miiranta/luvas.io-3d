@@ -1,0 +1,9 @@
+# Node / Angular
+node_modules/
+dist/
+.angular/
+out-tsc/
+
+# Misc
+*.log
+.DS_Store

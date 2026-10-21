@@ -1,0 +1,25 @@
+{
+  "tabWidth": 4,
+  "useTabs": false,
+  "printWidth": 100,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "semi": true,
+  "arrowParens": "always",
+  "bracketSameLine": false,
+  "overrides": [
+    {
+      "files": "*.html",
+      "options": {
+        "parser": "angular",
+        "tabWidth": 4
+      }
+    },
+    {
+      "files": "*.json",
+      "options": {
+        "tabWidth": 2
+      }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+services:
+  scan3d:
+    build: .
+    ports:
+      - '7130:7130'
+    restart: unless-stopped

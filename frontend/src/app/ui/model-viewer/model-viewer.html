@@ -1,0 +1,173 @@
+<canvas
+    #canvas
+    class="view"
+    (pointerdown)="down($event)"
+    (pointermove)="move($event)"
+    (pointerup)="up($event)"
+    (pointercancel)="up($event)"
+    (wheel)="wheel($event)"
+    (dblclick)="reframe()"
+    (contextmenu)="$event.preventDefault()"
+></canvas>
+
+@if (distance(); as label) {
+    @if (labelAt(); as at) {
+        <span class="measure" [style.left.px]="at.x" [style.top.px]="at.y">{{ label }}</span>
+    }
+}
+
+<div class="hud">
+    <span class="chip"
+        ><b>{{ summary() }}</b></span
+    >
+    <span class="spacer"></span>
+    <button type="button" class="icon" title="Metrics" (click)="openInsights.emit()">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="2.4" />
+            <circle cx="12" cy="7.6" r="1.5" fill="currentColor" />
+            <path
+                d="M12 11v6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+            />
+        </svg>
+    </button>
+    <button
+        type="button"
+        class="icon save"
+        [disabled]="!canExport()"
+        [title]="canExport() ? 'Export' : 'Export is available when the model is finished'"
+        (click)="openExport.emit()"
+    >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+                d="M12 3.6v10.2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.6"
+                stroke-linecap="round"
+            />
+            <path
+                d="M7.4 9.6L12 14.2l4.6-4.6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            />
+            <path
+                d="M4.6 18.4h14.8"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.6"
+                stroke-linecap="round"
+            />
+        </svg>
+    </button>
+    <button type="button" class="icon" title="New scan" (click)="requestReset.emit()">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+                d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+            />
+            <path
+                d="M18.4 2.8v4.2h-4.2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            />
+        </svg>
+    </button>
+</div>
+
+@if (error()) {
+    <p class="toast">{{ error() }}</p>
+}
+
+@if (measuring()) {
+    <p class="hint">
+        {{ distance() ? 'Tap again to start a new measurement' : 'Tap two points on the mesh' }}
+    </p>
+}
+
+<div class="dock">
+    <button
+        type="button"
+        class="icon"
+        [class.on]="showCameras()"
+        [attr.aria-pressed]="showCameras()"
+        title="Cameras and path"
+        (click)="toggleCameras()"
+    >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+                d="M3.5 7.5h11v9h-11zM14.5 10.5l6-3.2v9.4l-6-3.2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linejoin="round"
+            />
+        </svg>
+    </button>
+
+    <div class="segmented" role="group" aria-label="Layer">
+        <button
+            type="button"
+            [class.on]="mode() === 'mesh'"
+            [disabled]="!hasMesh()"
+            (click)="choose('mesh')"
+        >
+            Mesh
+        </button>
+        <button
+            type="button"
+            [class.on]="mode() === 'dense'"
+            [disabled]="!hasDense()"
+            (click)="choose('dense')"
+        >
+            Dense
+        </button>
+        <button
+            type="button"
+            [class.on]="mode() === 'sparse'"
+            [disabled]="!hasSparse()"
+            (click)="choose('sparse')"
+        >
+            Sparse
+        </button>
+    </div>
+
+    <button
+        type="button"
+        class="icon"
+        [class.on]="measuring()"
+        [attr.aria-pressed]="measuring()"
+        [disabled]="!hasMesh()"
+        title="Measure"
+        (click)="toggleMeasure()"
+    >
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path
+                d="M3.8 15.6l11.8-11.8 4.6 4.6L8.4 20.2z"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linejoin="round"
+            />
+            <path
+                d="M8.2 11.2l2 2M11 8.4l2 2M13.8 5.6l2 2"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+            />
+        </svg>
+    </button>
+</div>

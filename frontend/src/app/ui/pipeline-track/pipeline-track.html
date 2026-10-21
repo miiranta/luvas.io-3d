@@ -1,0 +1,62 @@
+<section class="track" [class.open]="open()" [class.failed]="failed()">
+    <button type="button" class="head" [attr.aria-expanded]="open()" (click)="toggle()">
+        @if (building()) {
+            <i class="spinner" aria-hidden="true"></i>
+        } @else {
+            <i class="state" [class.bad]="failed()" aria-hidden="true">{{
+                failed() ? '!' : '✓'
+            }}</i>
+        }
+        <span class="title">{{ title() }}</span>
+        <span class="count">{{ done() }}/{{ count() }}</span>
+        <b class="total">{{ total() }}</b>
+        <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path
+                d="M6 9.5l6 6 6-6"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+            />
+        </svg>
+    </button>
+
+    @if (open()) {
+        <ol>
+            @for (row of rows(); track row.id; let index = $index) {
+                <li [class]="row.status">
+                    <span class="mark" aria-hidden="true">
+                        @switch (row.status) {
+                            @case ('done') {
+                                ✓
+                            }
+                            @case ('failed') {
+                                !
+                            }
+                            @case ('running') {
+                                <i class="spinner"></i>
+                            }
+                            @default {
+                                {{ index + 1 }}
+                            }
+                        }
+                    </span>
+                    <span class="name">
+                        {{ row.label }}
+                        @if (row.status === 'running' || row.note) {
+                            <small>{{ row.note ?? row.detail }}</small>
+                        }
+                    </span>
+                    <span class="time">{{ row.time }}</span>
+                    @if (row.status === 'running' && row.fraction >= 0) {
+                        <span class="bar"><span [style.width.%]="row.fraction * 100"></span></span>
+                    }
+                </li>
+            }
+        </ol>
+        <p class="sum">
+            processing <b>{{ build() }}</b> · capture + processing <b>{{ total() }}</b>
+        </p>
+    }
+</section>
