@@ -19,6 +19,8 @@ export interface GpuContext {
     device: GPUDevice;
     /** Adapter description for the diagnostics panel. */
     label: string;
+    /** Set when the system took the device away (driver reset, memory pressure). */
+    lost: string | null;
 }
 
 /** Requests a WebGPU device with the largest storage bindings the adapter allows. */
@@ -46,7 +48,9 @@ export async function requestGpu(): Promise<GpuContext> {
     });
     const info = adapter.info;
     const label = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ');
-    return { device, label: label || 'webgpu' };
+    const context: GpuContext = { device, label: label || 'webgpu', lost: null };
+    void device.lost.then((reason) => (context.lost = reason.message || reason.reason || 'lost'));
+    return context;
 }
 
 /** Copies a GPU buffer region into a new CPU array. */

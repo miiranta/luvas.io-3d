@@ -45,7 +45,8 @@ const PHOTOMETRIC_ITERATIONS = 5;
 const GEOMETRIC_ITERATIONS = 2;
 /** Caps the surface resolution so meshes stay around ≤ 1 M triangles on a phone. */
 const DENSE_CELL_BUDGET = 500_000;
-const BRICK_BUDGET = 24_000;
+/** 16 k bricks × 512 voxels × 8 B = 64 MB of GPU memory (and the same once read back). */
+const BRICK_BUDGET = 16_000;
 const GRID_CELL_BUDGET = 8_000_000;
 const MIN_WEIGHT = 0.6;
 const ATLAS_MAX = 4096;
@@ -70,6 +71,11 @@ export async function reconstruct(
         report(stage, -1);
         const start = performance.now();
         const result = await work();
+        if (gpu.lost) {
+            throw new Error(
+                `the phone reset the GPU during ${stage} (${gpu.lost}) — close other apps and try a shorter scan`,
+            );
+        }
         const ms = performance.now() - start;
         timings.push({ name: stage, ms });
         sink.stage({ stage, status: 'done', fraction: 1, detail: null, ms });
@@ -111,10 +117,14 @@ export async function reconstruct(
         views,
         keyframes.map((k) => k.work.gray),
     );
-    const priors = keyframes.map((k) => (k.depth ? upsampleDepth(k.depth, width, height) : null));
+    // Phone depth at stereo resolution, made on demand (keeping all of them costs ~1 MB a view).
+    const priorOf = (i: number) => {
+        const depth = keyframes[i].depth;
+        return depth ? upsampleDepth(depth, width, height) : null;
+    };
     const sources = keyframes.map((_, i) => selectSources(map, i, MVS_SOURCES));
     const checks = keyframes.map((_, i) => selectSources(map, i, FILTER_SOURCES));
-    const ranges = keyframes.map((_, i) => depthRange(map, i, priors[i]));
+    const ranges = keyframes.map((k, i) => depthRange(map, i, k.depth?.meters ?? null));
     const total = keyframes.length;
     await timed('stereo', async () => {
         for (let i = 0; i < total; i++) {
@@ -123,7 +133,7 @@ export async function reconstruct(
                 sources: sources[i],
                 minDepth: ranges[i][0],
                 maxDepth: ranges[i][1],
-                prior: priors[i],
+                prior: priorOf(i),
                 geometric: false,
                 iterations: PHOTOMETRIC_ITERATIONS,
             });
@@ -206,16 +216,13 @@ export async function reconstruct(
         const tsdf = new TsdfVolume(device, grid, layout, stereo.filtered, width, height);
         for (let i = 0; i < total; i++) {
             report('mesh', (0.8 * i) / total, `integrating ${i + 1}/${total}`);
-            const encoder = device.createCommandEncoder();
-            stereo.encodeFilter(encoder, i, checks[i]);
-            tsdf.encodeIntegrate(encoder, {
+            await stereo.filter(i, checks[i]);
+            await tsdf.integrate({
                 intrinsics: map.frames[i].intrinsics,
                 pose: map.frames[i].pose,
                 maxDepth: ranges[i][1],
-                prior: priors[i],
+                prior: priorOf(i),
             });
-            device.queue.submit([encoder.finish()]);
-            if (i % 8 === 7) await device.queue.onSubmittedWorkDone();
         }
         report('mesh', 0.85, 'extracting surface');
         const volume = await tsdf.read();
@@ -243,13 +250,24 @@ export async function reconstruct(
     }));
     const selection = await timed('views', async () => {
         const far = farthestDistance(mesh.positions, cameras) * 1.2 + 0.1;
+        // Visibility only needs the z-buffer at face centroids: half resolution is plenty and
+        // a quarter of the GPU work per view (the scores scale equally for every view).
+        const zWidth = Math.round(texture.width / 2);
+        const zHeight = Math.round(texture.height / 2);
         const candidates = await faceCandidates(
             device,
             mesh.positions,
             mesh.indices,
-            textureViews,
-            texture.width,
-            texture.height,
+            textureViews.map((view) => ({
+                ...view,
+                intrinsics: scaleIntrinsics(
+                    view.intrinsics,
+                    zWidth / view.width,
+                    zHeight / view.height,
+                ),
+            })),
+            zWidth,
+            zHeight,
             0.02,
             far,
             (fraction) => report('views', fraction * 0.9),

@@ -58,6 +58,8 @@ struct Params {
     dims: vec4<u32>,
     range: vec4<f32>,
     state: vec4<u32>,
+    /** Rows [x, x + y) processed by this dispatch (work is sliced to keep GPU submits short). */
+    band: vec4<u32>,
     views: array<View, 8>,
 };
 
@@ -100,6 +102,12 @@ fn random() -> f32 {
 }
 
 fn width() -> u32 { return params.dims.x; }
+
+/** Absolute row of a banded dispatch, or a value ≥ height() when outside the band. */
+fn band_row(y: u32) -> u32 {
+    let row = y + params.band.x;
+    return select(height(), row, y < params.band.y);
+}
 fn height() -> u32 { return params.dims.y; }
 
 fn offset_of(i: u32) -> vec2<i32> {
@@ -283,13 +291,14 @@ fn seed(index: u32) {
 
 @compute @workgroup_size(8, 8)
 fn init(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= width() || gid.y >= height()) {
+    let y = band_row(gid.y);
+    if (gid.x >= width() || y >= height()) {
         return;
     }
-    let index = gid.y * width() + gid.x;
-    let p = vec2<f32>(f32(gid.x), f32(gid.y));
+    let index = y * width() + gid.x;
+    let p = vec2<f32>(f32(gid.x), f32(y));
     seed(index);
-    prepare_window(vec2<i32>(gid.xy));
+    prepare_window(vec2<i32>(i32(gid.x), i32(y)));
     let ray = ray_of(p);
     var n = random_normal(ray);
     var d = random_depth();
@@ -332,7 +341,7 @@ fn orient(o: vec2<i32>, direction: u32) -> vec2<i32> {
 
 @compute @workgroup_size(8, 8)
 fn propagate(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let y = gid.y;
+    let y = band_row(gid.y);
     let x = gid.x * 2u + ((y + params.state.y) & 1u);
     if (x >= width() || y >= height()) {
         return;
@@ -419,17 +428,18 @@ fn pack(@builtin(global_invocation_id) gid: vec3<u32>) {
 /** Keeps a depth only if enough source views reproject it consistently (forward–backward). */
 @compute @workgroup_size(8, 8)
 fn consistency(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= width() || gid.y >= height()) {
+    let y = band_row(gid.y);
+    if (gid.x >= width() || y >= height()) {
         return;
     }
-    let index = gid.y * width() + gid.x;
+    let index = y * width() + gid.x;
     let packed = depths[params.dims.z * width() * height() + index];
     let d = unpack_depth(packed);
     if (!(d > 0.0) || unpack_cost(packed) > FILTER_COST) {
         filtered[index] = 0u;
         return;
     }
-    let p = vec2<f32>(f32(gid.x), f32(gid.y));
+    let p = vec2<f32>(f32(gid.x), f32(y));
     let x = ray_of(p) * d;
     var agree = 0u;
     var sum = d;

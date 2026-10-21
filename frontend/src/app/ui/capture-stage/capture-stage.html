@@ -116,7 +116,11 @@
             ><b>{{ points() }}</b> points</span
         >
         @if (depthSensing()) {
-            <span class="chip dim">depth</span>
+            <span
+                class="chip dim"
+                title="This phone reports depth (ARCore). It drives the live preview, guides the stereo and fills blank surfaces."
+                >phone depth</span
+            >
         }
     </div>
 

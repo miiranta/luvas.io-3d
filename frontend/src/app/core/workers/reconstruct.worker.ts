@@ -64,6 +64,10 @@ async function handle(request: WorkerRequest): Promise<void> {
         }
         case 'finish': {
             const context = await (gpu ??= requestGpu());
+            if (context.lost) {
+                gpu = null;
+                throw new Error(`the GPU is unavailable (${context.lost}) — try again`);
+            }
             result = await reconstruct(session, context, {
                 stage: (event) => post({ kind: 'stage', event }),
                 cameras: (cameras) => {
@@ -167,9 +171,11 @@ function exportBlob(scan: Reconstruction, format: ExportFormat): Blob {
 self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
     const request = event.data;
     queue = queue.then(() =>
-        handle(request).catch((error) =>
-            post({ kind: 'error', message: messageOf(error), request: request.kind }),
-        ),
+        handle(request).catch(async (error) => {
+            // A reset device cannot be reused; the next attempt asks for a new one.
+            if (gpu && (await gpu.catch(() => null))?.lost) gpu = null;
+            post({ kind: 'error', message: messageOf(error), request: request.kind });
+        }),
     );
 });
 

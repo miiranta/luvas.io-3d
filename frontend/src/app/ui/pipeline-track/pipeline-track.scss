@@ -4,8 +4,9 @@
     position: fixed;
     z-index: layers.$minimap;
     top: 4.3rem;
-    left: 0.8rem;
-    width: min(calc(100vw - 1.6rem), 310px);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(calc(100vw - 1.6rem), 380px);
 }
 
 .track {

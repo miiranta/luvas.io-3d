@@ -25,9 +25,16 @@ export interface SolveOptions {
 }
 
 const MAX_SOURCES = 8;
-const SLOT_BYTES = 768;
-const MAX_SLOTS = 32;
+const PARAMS_BYTES = 720;
 const GEOMETRIC_WEIGHT = 0.2;
+/**
+ * GPU time budget per submit. Phone GPUs are shared with the system compositor and a long
+ * submit freezes the screen or trips the driver watchdog (which can reset the whole phone UI),
+ * so the work is sliced into row bands whose height adapts to stay near this budget.
+ */
+const SUBMIT_MS = 20;
+const MIN_BAND = 8;
+const FIRST_BAND = 32;
 
 /**
  * GPU PatchMatch for every keyframe. All gray images live in one texture array and all packed
@@ -48,6 +55,8 @@ export class DenseStereo {
         GPUComputePipeline
     >;
     private readonly zeros: Float32Array;
+    /** Rows per dispatch, adapted to the measured GPU time. */
+    private bandRows = FIRST_BAND;
 
     constructor(
         private readonly device: GPUDevice,
@@ -79,7 +88,7 @@ export class DenseStereo {
         this.filtered = storageBuffer(device, pixels * 4, 'filtered');
         this.uniforms = device.createBuffer({
             label: 'stereo params',
-            size: SLOT_BYTES * MAX_SLOTS,
+            size: PARAMS_BYTES,
             usage: BufferUsage.UNIFORM | BufferUsage.COPY_DST,
         });
 
@@ -99,7 +108,7 @@ export class DenseStereo {
                 {
                     binding: 2,
                     visibility: ShaderStage.COMPUTE,
-                    buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 704 },
+                    buffer: { type: 'uniform', minBindingSize: PARAMS_BYTES },
                 },
                 storage(3),
                 storage(4),
@@ -116,7 +125,7 @@ export class DenseStereo {
                     binding: 1,
                     resource: device.createSampler({ magFilter: 'linear', minFilter: 'linear' }),
                 },
-                { binding: 2, resource: { buffer: this.uniforms, size: 704 } },
+                { binding: 2, resource: { buffer: this.uniforms } },
                 { binding: 3, resource: { buffer: this.hyp } },
                 { binding: 4, resource: { buffer: this.cost } },
                 { binding: 5, resource: { buffer: this.prior } },
@@ -145,63 +154,108 @@ export class DenseStereo {
         const sources = options.sources.slice(0, MAX_SOURCES);
         if (sources.length === 0) return;
         this.device.queue.writeBuffer(this.prior, 0, options.prior ?? this.zeros);
-        const slots: ArrayBuffer[] = [];
         const flags = options.geometric ? 1 : 0;
-        slots.push(this.params(ref, sources, options, 0, 0, 1, flags));
+        await this.sliced(this.pipelines.init, 8, (row, rows) =>
+            this.params(
+                ref,
+                sources,
+                options,
+                { iteration: 0, phase: 0, step: 1, flags },
+                row,
+                rows,
+            ),
+        );
         for (let iteration = 0; iteration < options.iterations; iteration++) {
             const step = Math.pow(0.5, iteration);
             for (const phase of [0, 1]) {
-                slots.push(this.params(ref, sources, options, iteration, phase, step, flags));
+                // Red/black: a band only reads the other colour, so bands may run in any order.
+                await this.sliced(this.pipelines.propagate, 16, (row, rows) =>
+                    this.params(
+                        ref,
+                        sources,
+                        options,
+                        { iteration, phase, step, flags },
+                        row,
+                        rows,
+                    ),
+                );
             }
         }
-        const data = new Uint8Array(slots.length * SLOT_BYTES);
-        slots.forEach((slot, i) => data.set(new Uint8Array(slot), i * SLOT_BYTES));
-        this.device.queue.writeBuffer(this.uniforms, 0, data);
-
+        this.device.queue.writeBuffer(
+            this.uniforms,
+            0,
+            this.params(
+                ref,
+                sources,
+                options,
+                { iteration: 0, phase: 0, step: 0, flags },
+                0,
+                this.height,
+            ),
+        );
         const encoder = this.device.createCommandEncoder();
         const pass = encoder.beginComputePass();
-        const gx = Math.ceil(this.width / 8);
-        const gy = Math.ceil(this.height / 8);
-        pass.setPipeline(this.pipelines.init);
-        pass.setBindGroup(0, this.bindGroup, [0]);
-        pass.dispatchWorkgroups(gx, gy);
-        pass.setPipeline(this.pipelines.propagate);
-        for (let slot = 1; slot < slots.length; slot++) {
-            pass.setBindGroup(0, this.bindGroup, [slot * SLOT_BYTES]);
-            pass.dispatchWorkgroups(Math.ceil(this.width / 16), gy);
-        }
         pass.setPipeline(this.pipelines.pack);
-        pass.setBindGroup(0, this.bindGroup, [0]);
+        pass.setBindGroup(0, this.bindGroup);
         pass.dispatchWorkgroups(Math.ceil((this.width * this.height) / 64));
         pass.end();
         this.device.queue.submit([encoder.finish()]);
         await this.device.queue.onSubmittedWorkDone();
     }
 
-    /** Multi-view consistency check into `filtered` (left on the GPU). */
-    encodeFilter(encoder: GPUCommandEncoder, ref: number, sources: number[]): void {
-        const slot = this.params(
-            ref,
-            sources.slice(0, MAX_SOURCES),
-            { minDepth: 0.01, maxDepth: 100 },
-            0,
-            0,
-            0,
-            0,
+    /** Multi-view consistency check of one view into `filtered` (left on the GPU). */
+    async filter(ref: number, sources: number[]): Promise<void> {
+        const checked = sources.slice(0, MAX_SOURCES);
+        await this.sliced(this.pipelines.consistency, 8, (row, rows) =>
+            this.params(
+                ref,
+                checked,
+                { minDepth: 0.01, maxDepth: 100 },
+                { iteration: 0, phase: 0, step: 0, flags: 0 },
+                row,
+                rows,
+            ),
         );
-        this.device.queue.writeBuffer(this.uniforms, 0, slot);
-        const pass = encoder.beginComputePass();
-        pass.setPipeline(this.pipelines.consistency);
-        pass.setBindGroup(0, this.bindGroup, [0]);
-        pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8));
-        pass.end();
+    }
+
+    /**
+     * Runs a per-pixel pipeline over the image in row bands, one short submit per band, waiting
+     * for each so other GPU clients (the compositor) get the GPU in between.
+     */
+    private async sliced(
+        pipeline: GPUComputePipeline,
+        columnsPerGroup: number,
+        params: (row: number, rows: number) => ArrayBuffer,
+    ): Promise<void> {
+        for (let row = 0; row < this.height;) {
+            const rows = Math.min(this.bandRows, this.height - row);
+            this.device.queue.writeBuffer(this.uniforms, 0, params(row, rows));
+            const encoder = this.device.createCommandEncoder();
+            const pass = encoder.beginComputePass();
+            pass.setPipeline(pipeline);
+            pass.setBindGroup(0, this.bindGroup);
+            pass.dispatchWorkgroups(Math.ceil(this.width / columnsPerGroup), Math.ceil(rows / 8));
+            pass.end();
+            const start = performance.now();
+            this.device.queue.submit([encoder.finish()]);
+            await this.device.queue.onSubmittedWorkDone();
+            this.adapt(performance.now() - start, rows);
+            row += rows;
+        }
+    }
+
+    private adapt(ms: number, rows: number): void {
+        if (ms > SUBMIT_MS * 1.5 && this.bandRows > MIN_BAND) {
+            const scaled = Math.floor((rows * SUBMIT_MS) / ms / 8) * 8;
+            this.bandRows = Math.max(MIN_BAND, Math.min(this.bandRows - 8, scaled));
+        } else if (ms < SUBMIT_MS / 3 && rows === this.bandRows && this.bandRows < this.height) {
+            this.bandRows = Math.min(Math.ceil(this.height / 8) * 8, this.bandRows * 2);
+        }
     }
 
     /** Filtered packed depth map of one view, read back to the CPU. */
     async filteredMap(ref: number, sources: number[]): Promise<Uint32Array> {
-        const encoder = this.device.createCommandEncoder();
-        this.encodeFilter(encoder, ref, sources);
-        this.device.queue.submit([encoder.finish()]);
+        await this.filter(ref, sources);
         return new Uint32Array(
             await readBuffer(this.device, this.filtered, this.width * this.height * 4),
         );
@@ -217,12 +271,12 @@ export class DenseStereo {
         ref: number,
         sources: number[],
         range: { minDepth: number; maxDepth: number },
-        iteration: number,
-        phase: number,
-        step: number,
-        flags: number,
+        state: { iteration: number; phase: number; step: number; flags: number },
+        row: number,
+        rows: number,
     ): ArrayBuffer {
-        const buffer = new ArrayBuffer(SLOT_BYTES);
+        const { iteration, phase, step, flags } = state;
+        const buffer = new ArrayBuffer(PARAMS_BYTES);
         const f = new Float32Array(buffer);
         const u = new Uint32Array(buffer);
         const reference = this.views[ref];
@@ -233,10 +287,11 @@ export class DenseStereo {
         // Deterministic seed per dispatch so that runs are reproducible.
         const seed = Math.imul(ref + 1, 0x9e3779b1) + iteration * 97 + phase * 13 + flags * 7;
         u.set([iteration, phase, seed >>> 0, flags], 12);
+        u.set([row, rows, 0, 0], 16);
         sources.forEach((source, s) => {
             const view = this.views[source];
             const { R, t } = relativePose(reference.pose, view.pose);
-            const o = 16 + s * 20;
+            const o = 20 + s * 20;
             const ks = view.intrinsics;
             f.set([ks.fx, ks.fy, ks.cx, ks.cy], o);
             f.set([R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0], o + 4);

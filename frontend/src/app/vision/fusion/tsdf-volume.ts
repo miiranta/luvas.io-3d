@@ -6,6 +6,8 @@ export const BRICK = 8;
 const BRICK_VOXELS = BRICK * BRICK * BRICK;
 const MAX_WEIGHT = 96;
 const PRIOR_WEIGHT = 0.12;
+/** Bricks per submit (≈ 1 M voxel updates): short enough for phone GPUs. */
+const CHUNK_BRICKS = 2048;
 
 /** Sparse set of 8³ voxel bricks around the observed surface, on a bounded grid. */
 export class BrickGrid {
@@ -221,13 +223,12 @@ export class TsdfVolume {
     }
 
     /**
-     * Encodes integration of the depth map currently held in the bound depth buffer. Uses
-     * queue writes for its inputs, so submit once per view.
+     * Integrates the depth map currently held in the bound depth buffer. The visible bricks go
+     * in chunks, one short submit each, so a phone GPU is never monopolised for long.
      */
-    encodeIntegrate(encoder: GPUCommandEncoder, view: IntegrationView): void {
+    async integrate(view: IntegrationView): Promise<void> {
         const visible = this.visibleBricks(view);
         if (visible.length === 0) return;
-        this.device.queue.writeBuffer(this.visible, 0, visible);
         this.device.queue.writeBuffer(this.prior, 0, view.prior ?? this.zeros);
         const buffer = new ArrayBuffer(128);
         const f = new Float32Array(buffer);
@@ -238,14 +239,21 @@ export class TsdfVolume {
         f.set([R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0], 4);
         f.set([t[0], t[1], t[2], 0], 16);
         f.set([...this.grid.origin, this.grid.voxel], 20);
-        u.set([this.width, this.height, visible.length, 0], 24);
         f.set([this.truncation, PRIOR_WEIGHT, MAX_WEIGHT, 0], 28);
-        this.device.queue.writeBuffer(this.uniforms, 0, buffer);
-        const pass = encoder.beginComputePass();
-        pass.setPipeline(this.pipeline);
-        pass.setBindGroup(0, this.bindGroup);
-        pass.dispatchWorkgroups(Math.min(visible.length, 65535), Math.ceil(visible.length / 65535));
-        pass.end();
+        for (let start = 0; start < visible.length; start += CHUNK_BRICKS) {
+            const chunk = visible.subarray(start, start + CHUNK_BRICKS);
+            this.device.queue.writeBuffer(this.visible, 0, chunk);
+            u.set([this.width, this.height, chunk.length, 0], 24);
+            this.device.queue.writeBuffer(this.uniforms, 0, buffer);
+            const encoder = this.device.createCommandEncoder();
+            const pass = encoder.beginComputePass();
+            pass.setPipeline(this.pipeline);
+            pass.setBindGroup(0, this.bindGroup);
+            pass.dispatchWorkgroups(chunk.length);
+            pass.end();
+            this.device.queue.submit([encoder.finish()]);
+            await this.device.queue.onSubmittedWorkDone();
+        }
     }
 
     async read(): Promise<{ tsdf: Float32Array; weight: Float32Array }> {
