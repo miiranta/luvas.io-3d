@@ -50,6 +50,16 @@
     white-space: nowrap;
 }
 
+.quality {
+    padding: 0 0.45rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--outline);
+    background: var(--accent-soft);
+    border-radius: 999px;
+}
+
 .count {
     font-family: var(--mono);
     font-size: 0.66rem;
@@ -202,6 +212,36 @@ li {
     b {
         font-family: var(--mono);
         color: var(--text);
+    }
+}
+
+.name b {
+    color: var(--accent);
+}
+
+.rebuild {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0 0.6rem 0.55rem;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+
+    span {
+        flex: 1;
+    }
+
+    button {
+        padding: 0.2rem 0.6rem;
+        font-size: 0.7rem;
+        border-width: 2px;
+        border-radius: 999px;
+        box-shadow: 0 3px 0 var(--outline);
+
+        &.on {
+            color: #2b1a00;
+            background: var(--accent);
+        }
     }
 }
 

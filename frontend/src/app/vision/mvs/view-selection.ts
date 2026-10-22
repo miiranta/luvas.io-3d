@@ -13,7 +13,12 @@ const SIGMA_ABOVE = (15 * Math.PI) / 180;
  * no depth resolution, too large gives distorted patches). Falls back to pose geometry when
  * the reference has too few tracked points (low texture).
  */
-export function selectSources(map: SparseMap, ref: number, count: number): number[] {
+export function selectSources(
+    map: SparseMap,
+    ref: number,
+    count: number,
+    allowed?: ReadonlySet<number>,
+): number[] {
     const frame = map.frames[ref];
     const center = cameraCenter(frame.pose);
     const scores = new Float64Array(map.frames.length);
@@ -28,7 +33,7 @@ export function selectSources(map: SparseMap, ref: number, count: number): numbe
         const la = Math.hypot(a[0], a[1], a[2]);
         for (let o = 0; o < track.obs.length; o += 2) {
             const other = track.obs[o];
-            if (other === ref) continue;
+            if (other === ref || (allowed && !allowed.has(other))) continue;
             const c = centers[other];
             const b = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
             const cos = dot3(a, b) / (la * Math.hypot(b[0], b[1], b[2]));
@@ -53,7 +58,10 @@ export function selectSources(map: SparseMap, ref: number, count: number): numbe
         })
         .filter(
             ({ j, angle, baseline }) =>
-                j !== ref && angle < (40 * Math.PI) / 180 && baseline > 0.03,
+                j !== ref &&
+                (!allowed || allowed.has(j)) &&
+                angle < (40 * Math.PI) / 180 &&
+                baseline > 0.03,
         )
         .sort((a, b) => Math.abs(a.baseline - 0.15) - Math.abs(b.baseline - 0.15));
     return [...new Set([...ranked, ...byPose.map(({ j }) => j)])].slice(0, count);

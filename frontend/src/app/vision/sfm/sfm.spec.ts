@@ -1,4 +1,4 @@
-import { DESCRIPTOR_WORDS, FeatureSet } from '../features/orb-features';
+import { DESCRIPTOR_WORDS, FeatureSet, ORB_METRIC } from '../features/orb-features';
 import {
     Intrinsics,
     Pose,
@@ -10,7 +10,9 @@ import {
     project,
 } from '../geometry/camera';
 import { triangulate } from '../geometry/triangulate';
-import { fundamentalInliers, guidedMatch } from '../matching/guided-matcher';
+import { bruteForceMatch } from '../matching/brute-force-matcher';
+import { fundamentalInliers } from '../matching/fundamental-ransac';
+import { guidedMatch } from '../matching/guided-matcher';
 import { seededRandom, symmetricEigen } from '../math/dense';
 import { cross3, expSO3, multiply3, normalize3, rotationAngle, sub3 } from '../math/mat3';
 import { bundleAdjust } from './bundle-adjuster';
@@ -128,7 +130,86 @@ describe('symmetric eigen-decomposition', () => {
     });
 });
 
+/** Observations of the points by the true cameras, with ±0.3 px noise. */
+function observe(truth: Pose[], points: Float64Array, k: Intrinsics, random: () => number) {
+    const camera: number[] = [];
+    const point: number[] = [];
+    const u: number[] = [];
+    const v: number[] = [];
+    for (let p = 0; p < points.length / 3; p++) {
+        const x = points.subarray(p * 3, p * 3 + 3);
+        truth.forEach((pose, c) => {
+            const [pu, pv, z] = project(k, pose, x);
+            if (z <= 0 || pu < 0 || pu > 640 || pv < 0 || pv > 480) return;
+            camera.push(c);
+            point.push(p);
+            u.push(pu + (random() - 0.5) * 0.6);
+            v.push(pv + (random() - 0.5) * 0.6);
+        });
+    }
+    return {
+        camera: Int32Array.from(camera),
+        point: Int32Array.from(point),
+        u: Float64Array.from(u),
+        v: Float64Array.from(v),
+    };
+}
+
 describe('bundle adjustment', () => {
+    it('self-calibrates a wrong focal length', () => {
+        const random = seededRandom(3);
+        const truth = orbit(16, 0.9);
+        const points = cloud(400, random);
+        const reported = { ...K, fx: K.fx * 1.02, fy: K.fy * 1.02 };
+        const noisyPoints = new Float64Array(points);
+        for (let i = 0; i < noisyPoints.length; i++) noisyPoints[i] += (random() - 0.5) * 0.01;
+        const problem = {
+            intrinsics: truth.map(() => reported),
+            poses: truth.map(clonePose),
+            priors: truth.map(clonePose),
+            points: noisyPoints,
+            ...observe(truth, points, K, random),
+        };
+        const fixed = bundleAdjust(
+            { ...problem, poses: truth.map(clonePose), points: new Float64Array(noisyPoints) },
+            { iterations: 30 },
+        );
+        const report = bundleAdjust(problem, { iterations: 30, calibrateFocal: true });
+        expect(Math.abs(report.focalScale - 1 / 1.02)).toBeLessThan(0.002);
+        expect(report.finalRms).toBeLessThan(fixed.finalRms);
+    });
+
+    it('does not let a tracking jump across a break drag the poses', () => {
+        const random = seededRandom(4);
+        const truth = orbit(16, 0.9);
+        const points = cloud(400, random);
+        // The phone poses jump 3 cm after keyframe 8 (relocalisation) and stay shifted.
+        const priors = truth.map((pose, i) =>
+            i < 8
+                ? clonePose(pose)
+                : { R: pose.R, t: new Float64Array([pose.t[0] + 0.03, pose.t[1], pose.t[2]]) },
+        );
+        const noisyPoints = new Float64Array(points);
+        for (let i = 0; i < noisyPoints.length; i++) noisyPoints[i] += (random() - 0.5) * 0.01;
+        const poses = truth.map(clonePose);
+        bundleAdjust(
+            {
+                intrinsics: truth.map(() => K),
+                poses,
+                priors,
+                points: noisyPoints,
+                ...observe(truth, points, K, random),
+                breaks: new Set([8]),
+            },
+            { iterations: 30 },
+        );
+        for (const i of [7, 8, 15]) {
+            expect(
+                Math.hypot(...sub3(cameraCenter(poses[i]), cameraCenter(truth[i]))),
+            ).toBeLessThan(0.003);
+        }
+    });
+
     it('removes drift from the phone poses while keeping metric scale', () => {
         const random = seededRandom(11);
         const truth = orbit(16, 0.9);
@@ -178,7 +259,7 @@ describe('bundle adjustment', () => {
                 u: Float64Array.from(u),
                 v: Float64Array.from(v),
             },
-            30,
+            { iterations: 30 },
         );
         expect(report.finalRms).toBeLessThan(0.5);
         expect(report.finalRms).toBeLessThan(report.initialRms / 4);
@@ -233,6 +314,7 @@ describe('guided matching', () => {
                 level: new Uint8Array(count),
                 angle: new Float32Array(count),
                 descriptors: Uint32Array.from(descriptors),
+                metric: ORB_METRIC,
             },
         };
     }
@@ -260,5 +342,23 @@ describe('guided matching', () => {
 
         const robust = fundamentalInliers(fa.set, fb.set, matches, 1.5);
         expect(robust.length / 2).toBeGreaterThan(0.9 * correct);
+    });
+
+    it('matches without poses (all against all) when the pose cannot be trusted', () => {
+        const random = seededRandom(6);
+        const points = cloud(600, random);
+        const words = new Uint32Array(600 * DESCRIPTOR_WORDS);
+        for (let i = 0; i < words.length; i++) words[i] = (random() * 2 ** 32) >>> 0;
+        const [a, , b] = orbit(12, 0.9);
+        const fa = featureSet(a, points, words, random, 300);
+        const fb = featureSet(b, points, words, random, 300);
+        const matches = fundamentalInliers(fa.set, fb.set, bruteForceMatch(fa.set, fb.set), 2);
+        let correct = 0;
+        for (let m = 0; m < matches.length; m += 2) {
+            const id = fa.ids[matches[m]];
+            if (id >= 0 && id === fb.ids[matches[m + 1]]) correct++;
+        }
+        expect(matches.length / 2).toBeGreaterThan(300);
+        expect(correct / (matches.length / 2)).toBeGreaterThan(0.98);
     });
 });

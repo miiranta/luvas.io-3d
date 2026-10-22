@@ -21,6 +21,8 @@ export interface GpuContext {
     label: string;
     /** Set when the system took the device away (driver reset, memory pressure). */
     lost: string | null;
+    /** First uncaptured validation / out-of-memory error since it was last cleared. */
+    error: string | null;
 }
 
 /** Requests a WebGPU device with the largest storage bindings the adapter allows. */
@@ -48,8 +50,12 @@ export async function requestGpu(): Promise<GpuContext> {
     });
     const info = adapter.info;
     const label = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ');
-    const context: GpuContext = { device, label: label || 'webgpu', lost: null };
+    const context: GpuContext = { device, label: label || 'webgpu', lost: null, error: null };
     void device.lost.then((reason) => (context.lost = reason.message || reason.reason || 'lost'));
+    // Without this a failed submit is silently skipped and a stage just produces nothing.
+    device.addEventListener('uncapturederror', (event) => {
+        context.error ??= (event as GPUUncapturedErrorEvent).error.message;
+    });
     return context;
 }
 

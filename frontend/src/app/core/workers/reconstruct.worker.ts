@@ -44,6 +44,7 @@ async function handle(request: WorkerRequest): Promise<void> {
                     height: frame.depth.height,
                     meters: new Float32Array(frame.depth.meters),
                 },
+                segment: frame.segment,
             });
             post({
                 kind: 'keyframe',
@@ -68,44 +69,54 @@ async function handle(request: WorkerRequest): Promise<void> {
                 gpu = null;
                 throw new Error(`the GPU is unavailable (${context.lost}) — try again`);
             }
-            result = await reconstruct(session, context, {
-                stage: (event) => post({ kind: 'stage', event }),
-                cameras: (cameras) => {
-                    const buffer = copy(cameras);
-                    post({ kind: 'cameras', cameras: buffer }, [buffer]);
+            result = null;
+            result = await reconstruct(
+                session,
+                context,
+                {
+                    stage: (event) => post({ kind: 'stage', event }),
+                    cameras: (cameras) => {
+                        const buffer = copy(cameras);
+                        post({ kind: 'cameras', cameras: buffer }, [buffer]);
+                    },
+                    sparse: (positions, colors) => {
+                        const p = copy(positions);
+                        const c = copy(colors);
+                        post({ kind: 'sparse', positions: p, colors: c }, [p, c]);
+                    },
+                    dense: (cloud) => {
+                        const p = copy(cloud.positions);
+                        const c = copy(cloud.colors);
+                        post({ kind: 'dense', positions: p, colors: c }, [p, c]);
+                    },
+                    mesh: (mesh) => {
+                        const p = copy(mesh.positions);
+                        const n = copy(mesh.normals);
+                        const i = copy(mesh.indices);
+                        post({ kind: 'mesh', positions: p, normals: n, indices: i }, [p, n, i]);
+                    },
                 },
-                sparse: (positions, colors) => {
-                    const p = copy(positions);
-                    const c = copy(colors);
-                    post({ kind: 'sparse', positions: p, colors: c }, [p, c]);
-                },
-                dense: (cloud) => {
-                    const p = copy(cloud.positions);
-                    const c = copy(cloud.colors);
-                    post({ kind: 'dense', positions: p, colors: c }, [p, c]);
-                },
-                mesh: (mesh) => {
-                    const p = copy(mesh.positions);
-                    const n = copy(mesh.normals);
-                    const i = copy(mesh.indices);
-                    post({ kind: 'mesh', positions: p, normals: n, indices: i }, [p, n, i]);
-                },
-            });
-            const mesh = result.mesh;
-            const positions = copy(mesh.positions);
-            const uvs = copy(mesh.uvs);
-            const indices = copy(mesh.indices);
+                request.quality,
+            );
+            const model = result.model;
+            const positions = copy(model.positions);
+            const indices = copy(model.indices);
+            const uvs = model.uvs && copy(model.uvs);
+            const colors = model.colors && copy(model.colors);
             post(
                 {
-                    kind: 'textured',
+                    kind: 'model',
                     positions,
-                    uvs,
                     indices,
-                    atlas: new Blob([result.atlasJpeg as Uint8Array<ArrayBuffer>], {
-                        type: 'image/jpeg',
-                    }),
+                    uvs,
+                    colors,
+                    atlas:
+                        model.atlasJpeg &&
+                        new Blob([model.atlasJpeg as Uint8Array<ArrayBuffer>], {
+                            type: 'image/jpeg',
+                        }),
                 },
-                [positions, uvs, indices],
+                [positions, indices, ...(uvs ? [uvs] : []), ...(colors ? [colors] : [])],
             );
             post({ kind: 'metrics', metrics: result.metrics });
             post({ kind: 'done' });
@@ -142,10 +153,14 @@ function exportBlob(scan: Reconstruction, format: ExportFormat): Blob {
                 {
                     name: 'mesh',
                     mode: 4,
-                    positions: scan.mesh.positions,
-                    uvs: scan.mesh.uvs,
-                    indices: scan.mesh.indices,
-                    texture: { bytes: scan.atlasJpeg, mimeType: 'image/jpeg' },
+                    positions: scan.model.positions,
+                    indices: scan.model.indices,
+                    ...(scan.model.uvs && scan.model.atlasJpeg
+                        ? {
+                              uvs: scan.model.uvs,
+                              texture: { bytes: scan.model.atlasJpeg, mimeType: 'image/jpeg' },
+                          }
+                        : { colors: scan.model.colors ?? undefined }),
                 },
                 { name: 'cameras', mode: 1, positions: lines.positions, colors: lines.colors },
                 { name: 'sparse', mode: 0, positions: scan.sparse.positions, colors: sparseColors },

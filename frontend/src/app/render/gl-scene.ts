@@ -45,27 +45,36 @@ void main() {
 
 const MESH_VS = `#version 300 es
 in vec3 aPosition;
+in vec4 aColor;
 in vec2 aUv;
 uniform mat4 uViewProjection;
 out vec2 vUv;
 out vec3 vWorld;
+out vec4 vColor;
 void main() {
     gl_Position = uViewProjection * vec4(aPosition, 1.0);
     vUv = aUv;
     vWorld = aPosition;
+    vColor = aColor;
 }`;
 
 const MESH_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
 in vec3 vWorld;
+in vec4 vColor;
 uniform sampler2D uAtlas;
-uniform bool uTextured;
+/** 0 = shaded preview, 1 = baked atlas, 2 = vertex colours. */
+uniform int uMode;
 uniform vec3 uEye;
 out vec4 color;
 void main() {
-    if (uTextured) {
+    if (uMode == 1) {
         color = vec4(texture(uAtlas, vUv).rgb, 1.0);
+        return;
+    }
+    if (uMode == 2) {
+        color = vec4(vColor.rgb, 1.0);
         return;
     }
     // Untextured preview: flat normal from screen derivatives, headlight shading.
@@ -84,6 +93,8 @@ interface Drawable {
     vao: WebGLVertexArrayObject;
     buffers: WebGLBuffer[];
     count: number;
+    uvs?: boolean;
+    colors?: boolean;
 }
 
 export interface ColoredGeometry {
@@ -160,12 +171,13 @@ export class GlScene {
         });
     }
 
-    /** Uploads a mesh (positions + optional UVs). */
+    /** Uploads a mesh (positions + optional atlas UVs or RGBA8 vertex colours). */
     setMesh(
         name: string,
         positions: Float32Array,
         indices: Uint32Array,
         uvs: Float32Array | null,
+        colors: Uint8Array | null = null,
     ): void {
         this.remove(name);
         const gl = this.gl;
@@ -173,12 +185,19 @@ export class GlScene {
         gl.bindVertexArray(vao);
         const buffers = [this.attribute(0, positions, 3, gl.FLOAT, false)];
         if (uvs) buffers.push(this.attribute(2, uvs, 2, gl.FLOAT, false));
+        if (colors) buffers.push(this.attribute(1, colors, 4, gl.UNSIGNED_BYTE, true));
         const index = gl.createBuffer() as WebGLBuffer;
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, index);
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices as Uint32Array<ArrayBuffer>, gl.STATIC_DRAW);
         buffers.push(index);
         gl.bindVertexArray(null);
-        this.drawables.set(name, { vao, buffers, count: indices.length });
+        this.drawables.set(name, {
+            vao,
+            buffers,
+            count: indices.length,
+            uvs: uvs !== null,
+            colors: colors !== null,
+        });
     }
 
     setAtlas(image: ImageBitmap | null): void {
@@ -255,15 +274,16 @@ export class GlScene {
         gl.bindVertexArray(null);
     }
 
-    drawMesh(name: string, viewProjection: Mat4, eye: number[], textured: boolean): void {
+    /** Draws a mesh with its atlas, its vertex colours, or shaded when it has neither. */
+    drawMesh(name: string, viewProjection: Mat4, eye: number[]): void {
         const drawable = this.drawables.get(name);
         if (!drawable) return;
         const gl = this.gl;
         gl.useProgram(this.mesh.program);
         gl.uniformMatrix4fv(this.uniform(this.mesh, 'uViewProjection'), false, viewProjection);
         gl.uniform3fv(this.uniform(this.mesh, 'uEye'), eye);
-        const useAtlas = textured && this.atlas !== null;
-        gl.uniform1i(this.uniform(this.mesh, 'uTextured'), useAtlas ? 1 : 0);
+        const useAtlas = drawable.uvs === true && this.atlas !== null;
+        gl.uniform1i(this.uniform(this.mesh, 'uMode'), useAtlas ? 1 : drawable.colors ? 2 : 0);
         if (useAtlas) {
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, this.atlas);

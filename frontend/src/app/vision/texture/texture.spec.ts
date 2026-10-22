@@ -1,4 +1,5 @@
 import { FaceCandidates } from './face-visibility';
+import { labelFacesMrf, labellingEnergy } from './mrf-labeling';
 import { absorbSmallCharts, connectedCharts, faceAdjacency, labelFaces } from './view-labeling';
 
 /** A w × h grid of quads split into triangles (2 faces per cell). */
@@ -79,5 +80,59 @@ describe('view labelling', () => {
         expect(charts.count).toBe(2);
         expect(labels[0]).toBe(0);
         expect(labels[19]).toBe(1);
+    });
+});
+
+describe('MRF view selection', () => {
+    it('ignores small score differences instead of fragmenting the texture', () => {
+        const indices = grid(12, 12);
+        const adjacency = faceAdjacency(indices, 13 * 13);
+        // Three views with noisy, nearly equal scores: the best view per face changes all the time.
+        let seed = 7;
+        const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 0.2;
+        const scores = candidates(288, () => 0.9 + noise(), 3);
+        const labels = labelFacesMrf(scores, adjacency, 1);
+        const greedy = labelFaces(scores, adjacency);
+        expect(connectedCharts(labels, adjacency).count).toBeLessThanOrEqual(3);
+        const mrf = labellingEnergy(labels, scores, adjacency, 1);
+        const charts = labellingEnergy(greedy, scores, adjacency, 1);
+        expect(mrf.data + mrf.seams).toBeLessThanOrEqual(charts.data + charts.seams);
+    });
+
+    it('still switches view where one is clearly better', () => {
+        const indices = grid(10, 4);
+        const adjacency = faceAdjacency(indices, 11 * 5);
+        const scores = candidates(80, (f, v) => (f % 20 < 10 === (v === 0) ? 1 : 0.1), 2);
+        const labels = labelFacesMrf(scores, adjacency, 1);
+        expect(connectedCharts(labels, adjacency).count).toBe(2);
+        expect(labels[0]).toBe(0);
+        expect(labels[19]).toBe(1);
+    });
+
+    it('beats chart growing where views overlap in strips', () => {
+        const indices = grid(16, 8);
+        const adjacency = faceAdjacency(indices, 17 * 9);
+        // Four views each best on a vertical strip, all of them seeing everything a bit worse:
+        // chart growing seeds charts strip by strip, the MRF can trade strips against seams.
+        const scores = candidates(
+            256,
+            (f, v) => {
+                const column = Math.floor((f % 32) / 2);
+                return 1 - 0.12 * Math.abs(Math.floor(column / 4) - v) + 0.03 * ((f * 7 + v) % 3);
+            },
+            4,
+        );
+        const mrf = labellingEnergy(labelFacesMrf(scores, adjacency, 1), scores, adjacency, 1);
+        const greedy = labellingEnergy(labelFaces(scores, adjacency), scores, adjacency, 1);
+        expect(mrf.data + mrf.seams).toBeLessThan(greedy.data + greedy.seams);
+    });
+
+    it('leaves faces no view sees unlabelled', () => {
+        const indices = grid(4, 4);
+        const adjacency = faceAdjacency(indices, 5 * 5);
+        const scores = candidates(32, (f, v) => (f < 4 ? 0 : v === 0 ? 1 : 0.5), 2);
+        const labels = labelFacesMrf(scores, adjacency, 1);
+        expect(Array.from(labels.subarray(0, 4))).toEqual([-1, -1, -1, -1]);
+        expect(labels[10]).toBe(0);
     });
 });

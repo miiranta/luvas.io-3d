@@ -1,5 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import { PIPELINE_STAGES, StageEvent, StageId } from '../models/pipeline-stages';
+import { DEFAULT_QUALITY, QUALITY, Quality } from '../models/quality';
 import { ScanMetrics } from '../models/scan-results';
 import {
     ExportFormat,
@@ -15,19 +16,20 @@ export interface Cloud {
     colors: Uint8Array;
 }
 
-export interface TexturedModel {
+/** The final model: textured (uvs + atlas) or vertex-coloured. */
+export interface FinalModel {
     positions: Float32Array;
-    uvs: Float32Array;
     indices: Uint32Array;
-    atlas: ImageBitmap;
-    /** The encoded atlas, kept for exports done elsewhere. */
-    atlasBlob: Blob;
+    uvs: Float32Array | null;
+    colors: Uint8Array | null;
+    atlas: ImageBitmap | null;
 }
 
 export interface StageState {
     id: StageId;
     label: string;
-    detail: string;
+    /** The method this stage uses at the selected quality. */
+    method: string;
     status: 'pending' | 'running' | 'done' | 'failed';
     /** Final duration (ms) once done. */
     ms: number | null;
@@ -37,11 +39,11 @@ export interface StageState {
     note: string | null;
 }
 
-function initialStages(): StageState[] {
+function initialStages(quality: Quality): StageState[] {
     return PIPELINE_STAGES.map((stage) => ({
         id: stage.id,
         label: stage.label,
-        detail: stage.detail,
+        method: QUALITY[quality].methods[stage.id],
         status: 'pending',
         ms: null,
         startedAt: null,
@@ -51,6 +53,17 @@ function initialStages(): StageState[] {
 }
 
 const CLOCK_MS = 200;
+const QUALITY_KEY = 'scan3d.quality';
+
+function storedQuality(): Quality {
+    try {
+        const value = localStorage.getItem(QUALITY_KEY);
+        if (value === 'low' || value === 'medium' || value === 'high') return value;
+    } catch {
+        // Storage can be unavailable (private mode); the default applies.
+    }
+    return DEFAULT_QUALITY;
+}
 
 type VerdictListener = (id: number, accepted: boolean, reason: string | null) => void;
 
@@ -75,14 +88,20 @@ export class ScanService {
     readonly sceneDepth = signal(1);
     readonly inFlight = signal(0);
     readonly preview = signal<Cloud | null>(null);
-    readonly stages = signal<StageState[]>(initialStages());
+    /** Quality of the next build (chosen before recording, or for a rebuild). */
+    readonly quality = signal<Quality>(storedQuality());
+    /** Quality of the model on screen / being built. */
+    readonly builtQuality = signal<Quality | null>(null);
+    /** The worker reached its keyframe budget: recording should stop. */
+    readonly full = signal(false);
+    readonly stages = signal<StageState[]>(initialStages(this.quality()));
     /** Ticks while capturing or building, so running stages show a live timer. */
     readonly clock = signal(0);
     readonly cameras = signal<Float32Array | null>(null);
     readonly sparse = signal<Cloud | null>(null);
     readonly dense = signal<Cloud | null>(null);
     readonly mesh = signal<{ positions: Float32Array; indices: Uint32Array } | null>(null);
-    readonly textured = signal<TexturedModel | null>(null);
+    readonly model = signal<FinalModel | null>(null);
     readonly metrics = signal<ScanMetrics | null>(null);
     readonly error = signal<string | null>(null);
 
@@ -134,6 +153,7 @@ export class ScanService {
                 this.sceneDepth.set(message.sceneDepth);
                 if (!message.accepted && message.reason === 'blurry')
                     this.rejected.update((n) => n + 1);
+                if (!message.accepted && message.reason === 'full') this.full.set(true);
                 for (const listener of this.verdictListeners) {
                     listener(message.id, message.accepted, message.reason);
                 }
@@ -168,17 +188,23 @@ export class ScanService {
                     indices: new Uint32Array(message.indices),
                 });
                 break;
-            case 'textured':
+            case 'model': {
+                const model: FinalModel = {
+                    positions: new Float32Array(message.positions),
+                    indices: new Uint32Array(message.indices),
+                    uvs: message.uvs && new Float32Array(message.uvs),
+                    colors: message.colors && new Uint8Array(message.colors),
+                    atlas: null,
+                };
+                if (!message.atlas) {
+                    this.model.set(model);
+                    break;
+                }
                 void createImageBitmap(message.atlas).then((atlas) =>
-                    this.textured.set({
-                        positions: new Float32Array(message.positions),
-                        uvs: new Float32Array(message.uvs),
-                        indices: new Uint32Array(message.indices),
-                        atlas,
-                        atlasBlob: message.atlas,
-                    }),
+                    this.model.set({ ...model, atlas }),
                 );
                 break;
+            }
             case 'metrics':
                 this.metrics.set(message.metrics);
                 break;
@@ -202,7 +228,8 @@ export class ScanService {
                         ),
                     );
                     this.stopClock();
-                    this.phase.set(this.mesh() ? 'done' : 'idle');
+                    // Keep the capture: the build can be retried at another quality.
+                    this.phase.set(this.keyframes() >= 3 ? 'done' : 'idle');
                 }
                 if (message.request === 'export') {
                     this.pendingExport?.reject(new Error(message.message));
@@ -212,12 +239,27 @@ export class ScanService {
         }
     }
 
+    setQuality(quality: Quality): void {
+        this.quality.set(quality);
+        try {
+            localStorage.setItem(QUALITY_KEY, quality);
+        } catch {
+            // Not persisted; still used for this session.
+        }
+        if (this.phase() === 'idle' || this.phase() === 'capturing') {
+            this.stages.update((stages) =>
+                stages.map((stage) => ({ ...stage, method: QUALITY[quality].methods[stage.id] })),
+            );
+        }
+    }
+
     beginCapture(): void {
         this.phase.set('capturing');
         this.error.set(null);
+        this.full.set(false);
         const now = performance.now();
         this.stages.set(
-            initialStages().map((stage) =>
+            initialStages(this.quality()).map((stage) =>
                 stage.id === 'capture' ? { ...stage, status: 'running', startedAt: now } : stage,
             ),
         );
@@ -273,12 +315,37 @@ export class ScanService {
 
     finish(): void {
         this.phase.set('processing');
+        this.builtQuality.set(this.quality());
         this.stages.update((stages) =>
             stages.map((stage) =>
                 stage.id === 'capture' ? { ...stage, note: 'finishing keyframes' } : stage,
             ),
         );
-        this.send({ kind: 'finish' });
+        this.send({ kind: 'finish', quality: this.quality() });
+    }
+
+    /** Builds the same capture again at another quality. */
+    rebuild(quality: Quality): void {
+        if (this.phase() !== 'done') return;
+        this.setQuality(quality);
+        this.builtQuality.set(quality);
+        this.model()?.atlas?.close();
+        this.cameras.set(null);
+        this.sparse.set(null);
+        this.dense.set(null);
+        this.mesh.set(null);
+        this.model.set(null);
+        this.metrics.set(null);
+        this.error.set(null);
+        const capture = this.stages().find((stage) => stage.id === 'capture');
+        this.stages.set(
+            initialStages(quality).map((stage) =>
+                stage.id === 'capture' && capture ? { ...capture, note: null } : stage,
+            ),
+        );
+        this.phase.set('processing');
+        this.startClock();
+        this.send({ kind: 'finish', quality });
     }
 
     exportFile(format: ExportFormat): Promise<Blob> {
@@ -296,20 +363,22 @@ export class ScanService {
         this.ready.set(false);
         this.pendingExport?.reject(new Error('scan reset'));
         this.pendingExport = null;
-        this.textured()?.atlas.close();
+        this.model()?.atlas?.close();
         this.preview.set(null);
         this.cameras.set(null);
         this.sparse.set(null);
         this.dense.set(null);
         this.mesh.set(null);
-        this.textured.set(null);
+        this.model.set(null);
         this.metrics.set(null);
+        this.builtQuality.set(null);
+        this.full.set(false);
         this.keyframes.set(0);
         this.rejected.set(0);
         this.sparsePoints.set(0);
         this.inFlight.set(0);
         this.stopClock();
-        this.stages.set(initialStages());
+        this.stages.set(initialStages(this.quality()));
         this.error.set(null);
         this.phase.set('idle');
         this.start();

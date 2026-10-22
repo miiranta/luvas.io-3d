@@ -8,7 +8,7 @@ export const PIPELINE_STAGES = [
     {
         id: 'bundle',
         label: 'Bundle adjustment',
-        detail: 'poses + points with the phone odometry as priors',
+        detail: 'poses + points (+ focal) with the phone odometry as priors',
     },
     { id: 'stereo', label: 'Dense stereo', detail: 'PatchMatch multi-view stereo on the GPU' },
     {
@@ -19,7 +19,7 @@ export const PIPELINE_STAGES = [
     { id: 'filter', label: 'Depth fusion', detail: 'consistency filter → dense point cloud' },
     { id: 'mesh', label: 'Meshing', detail: 'TSDF volume → surface nets → clean-up' },
     { id: 'views', label: 'View selection', detail: 'visibility and best camera per face' },
-    { id: 'texture', label: 'Texture atlas', detail: 'colour levelling · seams · baking' },
+    { id: 'texture', label: 'Texture', detail: 'atlas with colour levelling, or vertex colours' },
 ] as const;
 
 export type StageId = (typeof PIPELINE_STAGES)[number]['id'];

@@ -205,6 +205,13 @@ function surfaceNormal(p: number[], object: number): number[] {
 }
 
 /** Unsigned distance (m) from a point to the nearest scene surface. */
+/** Signed distance to the nearest object (positive outside). */
+export function signedDistance(p: number[]): number {
+    let best = tableDistance(p);
+    for (const d of [boxDistance(p), sphereDistance(p)]) if (Math.abs(d) < Math.abs(best)) best = d;
+    return best;
+}
+
 export function surfaceDistance(p: number[]): number {
     return Math.min(
         Math.abs(tableDistance(p)),

@@ -1,7 +1,14 @@
-import { FeatureSet } from '../features/orb-features';
-import { Intrinsics, Pose, cameraCenter, opticalAxis, project } from '../geometry/camera';
+import { FeatureSet } from '../features/feature-set';
+import {
+    Intrinsics,
+    Pose,
+    cameraCenter,
+    clonePose,
+    opticalAxis,
+    project,
+} from '../geometry/camera';
 import { Observation, reprojectionError, triangulate } from '../geometry/triangulate';
-import { MatchList } from '../matching/guided-matcher';
+import { MatchList } from '../matching/match-list';
 import { dot3, norm3, sub3 } from '../math/mat3';
 import { BundleProblem } from './bundle-adjuster';
 
@@ -40,10 +47,31 @@ export interface Track {
 const MIN_ANGLE = (1.5 * Math.PI) / 180;
 const MAX_ERROR = 4;
 
+/** Everything a reconstruction may modify, so that rebuilding starts from the same capture. */
+export interface MapSnapshot {
+    tracks: {
+        obs: number[];
+        point: Float64Array | null;
+        color: [number, number, number];
+        error: number;
+        alive: boolean;
+    }[];
+    frameTracks: Int32Array[];
+    poses: Pose[];
+    intrinsics: Intrinsics[];
+}
+
+const SEED_GAP_SECONDS = 3;
+
 export class SparseMap {
     readonly frames: MapFrame[] = [];
     readonly tracks: Track[] = [];
     readonly matched = new Set<string>();
+    /**
+     * Frames whose odometry link to the previous frame is unreliable (tracking loss or a
+     * detected pose jump); bundle adjustment adds no relative-motion prior across them.
+     */
+    readonly breaks = new Set<number>();
 
     addFrame(frame: MapFrame): number {
         this.frames.push(frame);
@@ -289,6 +317,7 @@ export class SparseMap {
                 intrinsics: this.frames.map((frame) => frame.intrinsics),
                 poses: this.frames.map((frame) => frame.pose),
                 priors: this.frames.map((frame) => frame.prior),
+                breaks: this.breaks,
                 points,
                 camera: Int32Array.from(camera),
                 point: Int32Array.from(point),
@@ -326,6 +355,84 @@ export class SparseMap {
             }
         }
         return Float64Array.from(errors);
+    }
+
+    /**
+     * Gives a point to tracks that have none because their observations disagree — typically
+     * loop closures under odometry drift — by triangulating the longest time-contiguous run of
+     * observations. The track keeps every observation, so bundle adjustment can use the loop.
+     */
+    seedPoints(maxError = 3): number {
+        let seeded = 0;
+        for (const track of this.tracks) {
+            if (!track.alive || track.point || track.obs.length < 6) continue;
+            const order: number[] = [];
+            for (let o = 0; o < track.obs.length; o += 2) order.push(o);
+            order.sort((a, b) => this.frames[track.obs[a]].time - this.frames[track.obs[b]].time);
+            let best: number[] = [];
+            let run: number[] = [];
+            for (const o of order) {
+                const previous = run.at(-1);
+                const gap =
+                    previous === undefined
+                        ? 0
+                        : this.frames[track.obs[o]].time - this.frames[track.obs[previous]].time;
+                if (gap > SEED_GAP_SECONDS) run = [];
+                run.push(o);
+                if (run.length > best.length) best = [...run];
+            }
+            if (best.length < 2) continue;
+            const observations = best.map((o) => {
+                const frame = this.frames[track.obs[o]];
+                const f = track.obs[o + 1];
+                return {
+                    k: frame.intrinsics,
+                    pose: frame.pose,
+                    u: frame.features.x[f],
+                    v: frame.features.y[f],
+                };
+            });
+            const result = triangulate(observations);
+            if (!result || result.worst > maxError || result.angle < MIN_ANGLE) continue;
+            track.point = new Float64Array(result.point);
+            track.error = result.rms;
+            track.color = this.colorOf(track);
+            seeded++;
+        }
+        return seeded;
+    }
+
+    snapshot(): MapSnapshot {
+        return {
+            tracks: this.tracks.map((track) => ({
+                obs: [...track.obs],
+                point: track.point && new Float64Array(track.point),
+                color: [...track.color],
+                error: track.error,
+                alive: track.alive,
+            })),
+            frameTracks: this.frames.map((frame) => new Int32Array(frame.track)),
+            poses: this.frames.map((frame) => clonePose(frame.pose)),
+            intrinsics: this.frames.map((frame) => ({ ...frame.intrinsics })),
+        };
+    }
+
+    /** Restores a snapshot in place (intrinsics objects are shared with the keyframe store). */
+    restore(snapshot: MapSnapshot): void {
+        snapshot.tracks.forEach((saved, id) => {
+            const track = this.tracks[id];
+            track.obs = [...saved.obs];
+            track.point = saved.point && new Float64Array(saved.point);
+            track.color = [...saved.color];
+            track.error = saved.error;
+            track.alive = saved.alive;
+        });
+        this.frames.forEach((frame, i) => {
+            frame.track.set(snapshot.frameTracks[i]);
+            frame.pose.R.set(snapshot.poses[i].R);
+            frame.pose.t.set(snapshot.poses[i].t);
+            Object.assign(frame.intrinsics, snapshot.intrinsics[i]);
+        });
     }
 
     /** Distance from a pair's centres relative to the scene depth (baseline ratio). */

@@ -1,49 +1,5 @@
-/** Shared helpers for the packed depth format: f16 depth | 6+6-bit octahedral normal | 4-bit cost. */
-export const PACKING_WGSL = /* wgsl */ `
-fn unpack_depth(packed: u32) -> f32 {
-    return unpack2x16float(packed & 0xffffu).x;
-}
+import { PACKING_WGSL } from './depth-packing.wgsl';
 
-fn unpack_normal(packed: u32) -> vec3<f32> {
-    let e = vec2<f32>(f32((packed >> 16u) & 63u), f32((packed >> 22u) & 63u)) / 63.0 * 2.0 - 1.0;
-    var n = vec3<f32>(e.x, e.y, 1.0 - abs(e.x) - abs(e.y));
-    if (n.z < 0.0) {
-        let s = select(vec2<f32>(-1.0), vec2<f32>(1.0), n.xy >= vec2<f32>(0.0));
-        n = vec3<f32>((1.0 - abs(n.yx)) * s, n.z);
-    }
-    return normalize(n);
-}
-
-fn unpack_cost(packed: u32) -> u32 {
-    return packed >> 28u;
-}
-
-fn pack_sample(depth: f32, normal: vec3<f32>, cost: f32) -> u32 {
-    if (!(depth > 0.0) || cost >= 1.0) {
-        return 0u;
-    }
-    var e = normal.xy / (abs(normal.x) + abs(normal.y) + abs(normal.z));
-    if (normal.z < 0.0) {
-        let s = select(vec2<f32>(-1.0), vec2<f32>(1.0), e >= vec2<f32>(0.0));
-        e = (1.0 - abs(e.yx)) * s;
-    }
-    let q = vec2<u32>(clamp(e * 0.5 + 0.5, vec2<f32>(0.0), vec2<f32>(1.0)) * 63.0 + 0.5);
-    let c = min(15u, u32(cost * 15.0));
-    return (pack2x16float(vec2<f32>(depth, 0.0)) & 0xffffu) | (q.x << 16u) | (q.y << 22u) | (c << 28u);
-}
-`;
-
-/**
- * PatchMatch multi-view stereo (Gipuma / ACMH family) for one reference view:
- *  - per-pixel plane hypotheses (normal, depth) in the reference camera,
- *  - bilateral-weighted NCC over an 11×11 window sampled every 2 px, warped by the plane
- *    homography into each source view; the view costs are fused as the mean of the best k,
- *  - red/black checkerboard propagation that picks, in each of 8 regions around the pixel,
- *    the neighbour with the lowest current cost (adaptive checkerboard sampling),
- *  - random + perturbed refinement whose step shrinks every iteration,
- *  - optional geometric-consistency term (ACMM): forward–backward reprojection error
- *    against the source views' depth maps from the previous pass.
- */
 export const PATCHMATCH_WGSL = /* wgsl */ `
 struct View {
     k: vec4<f32>,
@@ -58,8 +14,14 @@ struct Params {
     dims: vec4<u32>,
     range: vec4<f32>,
     state: vec4<u32>,
-    /** Rows [x, x + y) processed by this dispatch (work is sliced to keep GPU submits short). */
+    /**
+     * Rows [x, x + y) processed by this dispatch (work is sliced to keep GPU submits short);
+     * z = views that must agree in the consistency filter.
+     */
     band: vec4<u32>,
+    /** Intrinsics and size of the coarse level (coarse-to-fine initialisation). */
+    coarse_k: vec4<f32>,
+    coarse_dims: vec4<u32>,
     views: array<View, 8>,
 };
 
@@ -71,6 +33,7 @@ struct Params {
 @group(0) @binding(5) var<storage, read> prior: array<f32>;
 @group(0) @binding(6) var<storage, read_write> depths: array<u32>;
 @group(0) @binding(7) var<storage, read_write> filtered: array<u32>;
+@group(0) @binding(8) var<storage, read> coarse: array<vec4<f32>>;
 
 const SAMPLES: u32 = 36u;
 const SIGMA_COLOR: f32 = 0.06;
@@ -325,6 +288,50 @@ fn init(@builtin(global_invocation_id) gid: vec3<u32>) {
     cost[index] = c;
 }
 
+/**
+ * Coarse-to-fine start: each pixel tries the planes of the four nearest coarse pixels (a plane
+ * is resolution independent: the coarse point and normal give the depth along this pixel's
+ * ray) and a random plane, and keeps the cheapest.
+ */
+@compute @workgroup_size(8, 8)
+fn init_coarse(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let y = band_row(gid.y);
+    if (gid.x >= width() || y >= height()) {
+        return;
+    }
+    let index = y * width() + gid.x;
+    let p = vec2<f32>(f32(gid.x), f32(y));
+    seed(index);
+    prepare_window(vec2<i32>(i32(gid.x), i32(y)));
+    let ray = ray_of(p);
+    var best = vec4<f32>(random_normal(ray), random_depth());
+    var best_cost = hypothesis_cost(p, best.xyz, best.w);
+    let size = vec2<i32>(i32(params.coarse_dims.x), i32(params.coarse_dims.y));
+    let q = (p + 0.5) * vec2<f32>(size) / vec2<f32>(f32(width()), f32(height())) - 0.5;
+    let base = vec2<i32>(floor(q));
+    let ck = params.coarse_k;
+    for (var corner = 0; corner < 4; corner++) {
+        let c = clamp(base + vec2<i32>(corner & 1, corner >> 1), vec2<i32>(0), size - 1);
+        let h = coarse[u32(c.y) * params.coarse_dims.x + u32(c.x)];
+        if (!(h.w > 0.0)) {
+            continue;
+        }
+        let point = vec3<f32>((f32(c.x) - ck.z) / ck.x, (f32(c.y) - ck.w) / ck.y, 1.0) * h.w;
+        let denominator = dot(h.xyz, ray);
+        if (abs(denominator) < 1e-6) {
+            continue;
+        }
+        let d = dot(h.xyz, point) / denominator;
+        let candidate = hypothesis_cost(p, h.xyz, d);
+        if (candidate < best_cost) {
+            best_cost = candidate;
+            best = vec4<f32>(h.xyz, d);
+        }
+    }
+    hyp[index] = best;
+    cost[index] = best_cost;
+}
+
 fn near_offset(i: u32) -> vec2<i32> {
     let m = i32((i + 1u) / 2u);
     return vec2<i32>(select(m, -m, (i & 1u) == 1u), -(m + 1));
@@ -452,7 +459,7 @@ fn consistency(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     // About 40 % of the checked views must agree (at least two): rejects the "fattened"
     // depths that leak across silhouettes and only agree with the closest neighbours.
-    let needed = min(params.dims.w, clamp((params.dims.w * 2u + 2u) / 5u, 2u, 4u));
+    let needed = min(params.dims.w, max(1u, params.band.z));
     if (agree < needed) {
         filtered[index] = 0u;
         return;

@@ -26,6 +26,21 @@
             </p>
         </div>
 
+        <div class="quality" role="radiogroup" aria-label="Quality">
+            @for (option of qualities; track option.id) {
+                <button
+                    type="button"
+                    role="radio"
+                    [attr.aria-checked]="option.id === quality()"
+                    [class.on]="option.id === quality()"
+                    (click)="setQuality(option.id)"
+                >
+                    {{ option.label }}
+                </button>
+            }
+        </div>
+        <p class="quality-note">{{ qualityNote() }}</p>
+
         <button type="button" class="open" [disabled]="!canStart()" (click)="start()">
             <span class="lens"></span>
             {{ starting() ? 'Starting AR…' : 'Start scan' }}

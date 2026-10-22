@@ -26,7 +26,8 @@ writeFileSync(
 );
 
 const server = createServer((request, response) => {
-    const file = request.url === '/' ? 'index.html' : request.url.slice(1);
+    const path = new URL(request.url, 'http://localhost').pathname;
+    const file = path === '/' ? 'index.html' : path.slice(1);
     try {
         const body = readFileSync(join(OUT, file));
         response.writeHead(200, {
@@ -42,7 +43,9 @@ const chrome = await openChrome({ name: 'verify', port: 9444 });
 const console_ = watchConsole(chrome.socket);
 let failed = true;
 try {
-    await chrome.call('Page.navigate', { url: `http://localhost:${PORT}/` });
+    await chrome.call('Page.navigate', {
+        url: `http://localhost:${PORT}/${process.env.VERIFY_QUERY ?? ''}`,
+    });
     const started = Date.now();
     let result = null;
     while (!result && Date.now() - started < TIMEOUT_MS) {

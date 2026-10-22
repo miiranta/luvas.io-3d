@@ -1,6 +1,6 @@
 import { Intrinsics, Pose, project } from '../geometry/camera';
 import { BufferUsage, readBuffer, storageBuffer } from '../gpu/gpu-device';
-import { PACKING_WGSL } from '../mvs/patchmatch.wgsl';
+import { PACKING_WGSL } from '../mvs/depth-packing.wgsl';
 
 export const BRICK = 8;
 const BRICK_VOXELS = BRICK * BRICK * BRICK;
@@ -71,6 +71,11 @@ export interface IntegrationView {
     maxDepth: number;
     /** Phone depth at work resolution (0 = none), used where stereo left holes. */
     prior: Float32Array | null;
+    /**
+     * Confidence weighting: the typical scene depth (m) that gets weight 1; nearer samples
+     * weigh more (stereo noise grows with depth²) and matching cost lowers the weight. 0 = off.
+     */
+    confidence: number;
 }
 
 const TSDF_WGSL = /* wgsl */ `
@@ -123,6 +128,12 @@ fn integrate(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_ind
         var w = 0.0;
         if (d > 0.0) {
             w = max(0.2, abs(dot(unpack_normal(packed), normalize(cam))));
+            if (u.band.w > 0.0) {
+                // Confidence: low matching cost (0–7 after the filter) and near views count more.
+                let c = f32(unpack_cost(packed)) / 8.0;
+                let r = clamp(u.band.w / d, 0.5, 2.0);
+                w *= max(0.15, (1.0 - c) * (1.0 - c)) * r * r;
+            }
         } else {
             d = prior[i];
             w = u.band.y;
@@ -239,7 +250,7 @@ export class TsdfVolume {
         f.set([R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0], 4);
         f.set([t[0], t[1], t[2], 0], 16);
         f.set([...this.grid.origin, this.grid.voxel], 20);
-        f.set([this.truncation, PRIOR_WEIGHT, MAX_WEIGHT, 0], 28);
+        f.set([this.truncation, PRIOR_WEIGHT, MAX_WEIGHT, view.confidence], 28);
         for (let start = 0; start < visible.length; start += CHUNK_BRICKS) {
             const chunk = visible.subarray(start, start + CHUNK_BRICKS);
             this.device.queue.writeBuffer(this.visible, 0, chunk);

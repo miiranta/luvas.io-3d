@@ -169,3 +169,37 @@ export function glViewMatrix(pose: Pose): Float32Array {
         1,
     ]);
 }
+
+/** World → world rigid transform X' = R·X + t. */
+export interface WorldTransform {
+    R: Float64Array;
+    t: Float64Array;
+}
+
+/**
+ * The world correction that moves camera `from` onto `to` (both world → camera):
+ * to = from ∘ G, i.e. G = from⁻¹ ∘ to.
+ */
+export function worldCorrection(from: Pose, to: Pose): WorldTransform {
+    const R = multiply3(transpose3(from.R), to.R);
+    const d = [to.t[0] - from.t[0], to.t[1] - from.t[1], to.t[2] - from.t[2]];
+    return { R, t: new Float64Array(applyTransposed3(from.R, d)) };
+}
+
+/** Applies a world correction to a pose: pose ∘ G. */
+export function correctPose(pose: Pose, correction: WorldTransform): Pose {
+    const rt = apply3(pose.R, correction.t);
+    return {
+        R: multiply3(pose.R, correction.R),
+        t: new Float64Array([rt[0] + pose.t[0], rt[1] + pose.t[1], rt[2] + pose.t[2]]),
+    };
+}
+
+/** Composition a ∘ b of world corrections (b first). */
+export function composeCorrections(a: WorldTransform, b: WorldTransform): WorldTransform {
+    const at = apply3(a.R, b.t);
+    return {
+        R: multiply3(a.R, b.R),
+        t: new Float64Array([at[0] + a.t[0], at[1] + a.t[1], at[2] + a.t[2]]),
+    };
+}

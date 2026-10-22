@@ -1,5 +1,6 @@
 import { PointAccumulator } from './point-accumulator';
-import { extractSurface, removeSmallComponents } from './surface-nets';
+import { removeSmallComponents } from './mesh';
+import { extractSurface } from './surface-nets';
 import { BRICK, BrickGrid } from './tsdf-volume';
 
 /** Sparse brick TSDF of a sphere (truncated at ±4 voxels), as the GPU fusion would produce. */

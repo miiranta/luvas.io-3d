@@ -1,4 +1,4 @@
-import { Intrinsics, Pose, relativePose } from '../geometry/camera';
+import { Intrinsics, Pose, relativePose, scaleIntrinsics } from '../geometry/camera';
 import {
     BufferUsage,
     ShaderStage,
@@ -22,10 +22,27 @@ export interface SolveOptions {
     /** Second pass: adds the geometric-consistency term and starts from the first pass. */
     geometric: boolean;
     iterations: number;
+    /** Start from the coarse level's planes instead of random ones (coarse-to-fine). */
+    fromCoarse?: boolean;
+    /** Store the packed depth map (default true; a coarse level only keeps its planes). */
+    pack?: boolean;
+}
+
+/** A half-resolution solve whose planes seed this level (coarse-to-fine). */
+export interface CoarseLevel {
+    hypotheses: GPUBuffer;
+    width: number;
+    height: number;
+}
+
+export interface StereoOptions {
+    coarse?: CoarseLevel;
+    /** Keep a depth map per view (needed for the geometric pass, filter and fusion). */
+    depthMaps?: boolean;
 }
 
 const MAX_SOURCES = 8;
-const PARAMS_BYTES = 720;
+const PARAMS_BYTES = 752;
 const GEOMETRIC_WEIGHT = 0.2;
 /**
  * GPU time budget per submit. Phone GPUs are shared with the system compositor and a long
@@ -51,10 +68,12 @@ export class DenseStereo {
     private readonly uniforms: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
     private readonly pipelines: Record<
-        'init' | 'propagate' | 'pack' | 'consistency',
+        'init' | 'initCoarse' | 'propagate' | 'pack' | 'consistency',
         GPUComputePipeline
     >;
     private readonly zeros: Float32Array;
+    private readonly placeholder: GPUBuffer | null;
+    private readonly coarse: CoarseLevel | null;
     /** Rows per dispatch, adapted to the measured GPU time. */
     private bandRows = FIRST_BAND;
 
@@ -63,9 +82,11 @@ export class DenseStereo {
         readonly width: number,
         readonly height: number,
         private readonly views: StereoView[],
-        grays: Uint8Array[],
+        options: StereoOptions = {},
     ) {
         const pixels = width * height;
+        this.coarse = options.coarse ?? null;
+        this.placeholder = this.coarse ? null : storageBuffer(device, 16, 'no coarse level');
         this.zeros = new Float32Array(pixels);
         this.images = device.createTexture({
             label: 'stereo images',
@@ -73,15 +94,8 @@ export class DenseStereo {
             format: 'r8unorm',
             usage: TextureUsage.TEXTURE_BINDING | TextureUsage.COPY_DST,
         });
-        grays.forEach((gray, layer) =>
-            device.queue.writeTexture(
-                { texture: this.images, origin: { x: 0, y: 0, z: layer } },
-                gray as Uint8Array<ArrayBuffer>,
-                { bytesPerRow: width, rowsPerImage: height },
-                { width, height, depthOrArrayLayers: 1 },
-            ),
-        );
-        this.depths = storageBuffer(device, views.length * pixels * 4, 'depth maps');
+        const maps = options.depthMaps === false ? 1 : views.length;
+        this.depths = storageBuffer(device, maps * pixels * 4, 'depth maps');
         this.hyp = storageBuffer(device, pixels * 16, 'hypotheses');
         this.cost = storageBuffer(device, pixels * 4, 'costs');
         this.prior = storageBuffer(device, pixels * 4, 'prior');
@@ -115,6 +129,7 @@ export class DenseStereo {
                 storage(5, true),
                 storage(6),
                 storage(7),
+                storage(8, true),
             ],
         });
         this.bindGroup = device.createBindGroup({
@@ -131,6 +146,12 @@ export class DenseStereo {
                 { binding: 5, resource: { buffer: this.prior } },
                 { binding: 6, resource: { buffer: this.depths } },
                 { binding: 7, resource: { buffer: this.filtered } },
+                {
+                    binding: 8,
+                    resource: {
+                        buffer: this.coarse?.hypotheses ?? (this.placeholder as GPUBuffer),
+                    },
+                },
             ],
         });
         const module = device.createShaderModule({ label: 'patchmatch', code: PATCHMATCH_WGSL });
@@ -143,10 +164,21 @@ export class DenseStereo {
             });
         this.pipelines = {
             init: make('init'),
+            initCoarse: make('init_coarse'),
             propagate: make('propagate'),
             pack: make('pack'),
             consistency: make('consistency'),
         };
+    }
+
+    /** Uploads the gray image (width × height) of one view; every view needs one before solving. */
+    setImage(layer: number, gray: Uint8Array): void {
+        this.device.queue.writeTexture(
+            { texture: this.images, origin: { x: 0, y: 0, z: layer } },
+            gray as Uint8Array<ArrayBuffer>,
+            { bytesPerRow: this.width, rowsPerImage: this.height },
+            { width: this.width, height: this.height, depthOrArrayLayers: 1 },
+        );
     }
 
     /** Runs PatchMatch for one reference view and stores its packed depth map. */
@@ -155,7 +187,9 @@ export class DenseStereo {
         if (sources.length === 0) return;
         this.device.queue.writeBuffer(this.prior, 0, options.prior ?? this.zeros);
         const flags = options.geometric ? 1 : 0;
-        await this.sliced(this.pipelines.init, 8, (row, rows) =>
+        const start =
+            options.fromCoarse && this.coarse ? this.pipelines.initCoarse : this.pipelines.init;
+        await this.sliced(start, 8, (row, rows) =>
             this.params(
                 ref,
                 sources,
@@ -181,6 +215,7 @@ export class DenseStereo {
                 );
             }
         }
+        if (options.pack === false) return;
         this.device.queue.writeBuffer(
             this.uniforms,
             0,
@@ -203,8 +238,16 @@ export class DenseStereo {
         await this.device.queue.onSubmittedWorkDone();
     }
 
-    /** Multi-view consistency check of one view into `filtered` (left on the GPU). */
-    async filter(ref: number, sources: number[]): Promise<void> {
+    /** The current per-pixel planes (to seed a finer level). */
+    get hypotheses(): GPUBuffer {
+        return this.hyp;
+    }
+
+    /**
+     * Multi-view consistency check of one view into `filtered` (left on the GPU): a depth
+     * survives when `needed` of the checked views reproject it consistently.
+     */
+    async filter(ref: number, sources: number[], needed: number): Promise<void> {
         const checked = sources.slice(0, MAX_SOURCES);
         await this.sliced(this.pipelines.consistency, 8, (row, rows) =>
             this.params(
@@ -214,6 +257,7 @@ export class DenseStereo {
                 { iteration: 0, phase: 0, step: 0, flags: 0 },
                 row,
                 rows,
+                needed,
             ),
         );
     }
@@ -254,8 +298,8 @@ export class DenseStereo {
     }
 
     /** Filtered packed depth map of one view, read back to the CPU. */
-    async filteredMap(ref: number, sources: number[]): Promise<Uint32Array> {
-        await this.filter(ref, sources);
+    async filteredMap(ref: number, sources: number[], needed: number): Promise<Uint32Array> {
+        await this.filter(ref, sources, needed);
         return new Uint32Array(
             await readBuffer(this.device, this.filtered, this.width * this.height * 4),
         );
@@ -274,6 +318,7 @@ export class DenseStereo {
         state: { iteration: number; phase: number; step: number; flags: number },
         row: number,
         rows: number,
+        needed = 0,
     ): ArrayBuffer {
         const { iteration, phase, step, flags } = state;
         const buffer = new ArrayBuffer(PARAMS_BYTES);
@@ -287,11 +332,20 @@ export class DenseStereo {
         // Deterministic seed per dispatch so that runs are reproducible.
         const seed = Math.imul(ref + 1, 0x9e3779b1) + iteration * 97 + phase * 13 + flags * 7;
         u.set([iteration, phase, seed >>> 0, flags], 12);
-        u.set([row, rows, 0, 0], 16);
+        u.set([row, rows, needed, 0], 16);
+        if (this.coarse) {
+            const ck = scaleIntrinsics(
+                k,
+                this.coarse.width / this.width,
+                this.coarse.height / this.height,
+            );
+            f.set([ck.fx, ck.fy, ck.cx, ck.cy], 20);
+            u.set([this.coarse.width, this.coarse.height, 0, 0], 24);
+        }
         sources.forEach((source, s) => {
             const view = this.views[source];
             const { R, t } = relativePose(reference.pose, view.pose);
-            const o = 20 + s * 20;
+            const o = 28 + s * 20;
             const ks = view.intrinsics;
             f.set([ks.fx, ks.fy, ks.cx, ks.cy], o);
             f.set([R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0], o + 4);
@@ -312,5 +366,6 @@ export class DenseStereo {
         ]) {
             buffer.destroy();
         }
+        this.placeholder?.destroy();
     }
 }

@@ -61,6 +61,39 @@
     box-shadow: var(--pop-lg);
 }
 
+.quality {
+    display: flex;
+    padding: 4px;
+    gap: 4px;
+    background: rgb(23 16 46 / 94%);
+    border: 3px solid var(--outline);
+    border-radius: 999px;
+    box-shadow: var(--pop);
+
+    button {
+        padding: 0.35rem 0.9rem;
+        font-size: 0.82rem;
+        border-width: 2px;
+        border-radius: 999px;
+        box-shadow: none;
+        background: transparent;
+        color: var(--text-dim);
+
+        &.on {
+            color: #2b1a00;
+            background: var(--accent);
+            box-shadow: 0 3px 0 var(--outline);
+        }
+    }
+}
+
+.quality-note {
+    margin: -0.9rem 0 0;
+    max-width: 320px;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+
 .lens {
     width: 30px;
     height: 30px;

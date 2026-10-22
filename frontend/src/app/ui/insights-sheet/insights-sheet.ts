@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject, output } from '@angular/core';
 import { stageLabel } from '../../core/models/pipeline-stages';
+import { QUALITY } from '../../core/models/quality';
 import { ScanService } from '../../core/services/scan-service';
 
 interface Row {
@@ -39,12 +40,18 @@ export class InsightsSheet {
             {
                 title: 'capture',
                 rows: [
+                    { label: 'quality', value: QUALITY[m.quality].label },
                     {
                         label: 'keyframes',
                         value: `${m.keyframes}${m.blurred ? ` (+${m.blurred} blurred, dropped)` : ''}`,
                     },
+                    { label: 'used for dense', value: String(m.keyframesUsed) },
+                    {
+                        label: 'tracking breaks',
+                        value: `${m.tracking.breaks} · ${m.tracking.fallbacks} rescued · ${m.tracking.realigned} re-anchored`,
+                    },
                     { label: 'phone depth', value: m.depthSensor ? 'yes' : 'no' },
-                    { label: 'stereo size', value: m.workSize.join(' × ') },
+                    { label: 'stereo size', value: m.stereoSize.join(' × ') },
                     { label: 'texture size', value: m.textureSize.join(' × ') },
                     { label: 'path length', value: `${m.trajectory.length.toFixed(2)} m` },
                     {
@@ -71,6 +78,10 @@ export class InsightsSheet {
                         value: `${mm(m.poseShift.mean)} mean · ${mm(m.poseShift.max)} max`,
                     },
                     { label: 'iterations', value: String(m.bundleIterations) },
+                    {
+                        label: 'focal correction',
+                        value: `${m.focalCorrection >= 0 ? '+' : ''}${(m.focalCorrection * 100).toFixed(2)} %`,
+                    },
                 ],
             },
             {
@@ -85,7 +96,12 @@ export class InsightsSheet {
                         label: 'size (x × y × z)',
                         value: m.extent.map((v) => (v * 100).toFixed(1)).join(' × ') + ' cm',
                     },
-                    { label: 'atlas', value: `${m.atlas.join(' × ')} · ${count(m.charts)} charts` },
+                    {
+                        label: 'texture',
+                        value: m.atlas
+                            ? `${m.atlas.join(' × ')} atlas · ${count(m.charts)} charts`
+                            : 'vertex colours',
+                    },
                     { label: 'untextured faces', value: count(m.untextured) },
                     { label: 'gpu', value: m.gpu },
                 ],

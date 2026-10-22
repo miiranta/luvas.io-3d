@@ -10,6 +10,7 @@
   },
   "include": [
     "tools/*.ts",
+    "tools/verify/*.ts",
     "src/app/core/xr/webxr.d.ts"
   ]
 }

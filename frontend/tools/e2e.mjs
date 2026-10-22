@@ -1,6 +1,7 @@
 // End-to-end run of the production build in headless Chrome with a fake WebXR runtime
-// (tools/fake-xr.ts): start AR, record two orbits of the synthetic scene, build the model,
-// look at every layer, measure, export and score the exported GLB against the true scene.
+// (tools/fake-xr.ts): start AR, record two orbits of the synthetic scene, build the model at the
+// default (High) quality, look at every layer, measure, export and score the exported GLB against
+// the true scene; then rebuild at Medium and Low from the pipeline card and score those too.
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import {
@@ -122,7 +123,7 @@ async function downloaded(extension, timeoutMs = 60_000) {
     return null;
 }
 
-/** Reads the triangle mesh, its UVs and the embedded JPEG from a GLB. */
+/** Reads the triangle mesh, its UVs or vertex colours and the embedded JPEG from a GLB. */
 function parseGlb(path) {
     const bytes = readFileSync(path);
     const jsonLength = bytes.readUInt32LE(12);
@@ -145,7 +146,14 @@ function parseGlb(path) {
     return {
         json,
         positions: accessor(mesh.attributes.POSITION, Float32Array, 3),
-        uvs: accessor(mesh.attributes.TEXCOORD_0, Float32Array, 2),
+        uvs:
+            mesh.attributes.TEXCOORD_0 === undefined
+                ? null
+                : accessor(mesh.attributes.TEXCOORD_0, Float32Array, 2),
+        colors:
+            mesh.attributes.COLOR_0 === undefined
+                ? null
+                : accessor(mesh.attributes.COLOR_0, Uint8Array, 4),
         indices: accessor(mesh.indices, Uint32Array, 1),
         jpegBytes: imageView ? imageView.byteLength : 0,
     };
@@ -153,6 +161,50 @@ function parseGlb(path) {
 
 const percentile = (values, q) =>
     [...values].sort((a, b) => a - b)[Math.floor(q * (values.length - 1))];
+
+/** Surface error of every third vertex of an exported mesh (m). */
+function meshErrors(glb) {
+    const errors = [];
+    for (let i = 0; i < glb.positions.length; i += 3 * 3) {
+        errors.push(
+            scene.surfaceDistance([glb.positions[i], glb.positions[i + 1], glb.positions[i + 2]]),
+        );
+    }
+    return errors;
+}
+
+/** Stage name, method line and time of every row of the (opened) pipeline card. */
+const pipelineRows = () =>
+    evaluate(`[...document.querySelectorAll('app-pipeline-track li')].map((li) => ({
+        status: li.className,
+        name: li.querySelector('.name').firstChild.textContent.trim(),
+        method: li.querySelector('.name small')?.textContent.replace(/\\s+/g, ' ').trim() ?? '',
+        time: li.querySelector('.time').textContent.trim(),
+    }))`);
+
+async function openTrack() {
+    if (!(await evaluate(`!!document.querySelector('app-pipeline-track li')`)))
+        await click('app-pipeline-track .head');
+    await wait(300);
+}
+
+async function exportGlb() {
+    for (const file of readdirSync(join(OUT, 'downloads')))
+        rmSync(join(OUT, 'downloads', file), { force: true });
+    await click('app-model-viewer button.save');
+    await wait(300);
+    await evaluate(
+        `[...document.querySelectorAll('app-export-sheet .choice')].find((b) => b.querySelector('b').textContent.trim() === 'Model · GLB')?.click()`,
+    );
+    const path = await downloaded('.glb');
+    await until(
+        `![...document.querySelectorAll('app-export-sheet .choice')].some((b) => b.disabled)`,
+        30_000,
+    );
+    await click('app-export-sheet .round-action.close');
+    await wait(300);
+    return path;
+}
 
 try {
     await call('Page.addScriptToEvaluateOnNewDocument', { source: fake.outputFiles[0].text });
@@ -180,6 +232,12 @@ try {
             : `start button disabled: ${await text('app-capture-stage .toast')}`,
     );
     await screenshot('01-start.png');
+    const chosen = await text('app-capture-stage .quality button.on');
+    check(
+        'quality selector defaults to High',
+        chosen === 'High',
+        `${chosen} · ${await text('app-capture-stage .quality-note')}`,
+    );
 
     await click('app-capture-stage button.open');
     const overlay = await until(
@@ -223,8 +281,10 @@ try {
     let done = false;
     let shot = false;
     while (!done && Date.now() - started < BUILD_TIMEOUT_MS) {
-        const running = await text('app-pipeline-track li.running .name');
-        if (running) seen.add(running.split('\n')[0].trim());
+        const running = await evaluate(
+            `document.querySelector('app-pipeline-track li.running .name')?.firstChild.textContent.trim() ?? null`,
+        );
+        if (running) seen.add(running);
         if (!shot && seen.size >= 3) {
             await screenshot('03-building.png');
             shot = true;
@@ -238,14 +298,8 @@ try {
         done,
         `${buildSeconds.toFixed(0)} s; seen running: ${[...seen].join(' → ')}`,
     );
-    await click('app-pipeline-track .head');
-    await wait(300);
-    const track =
-        await evaluate(`[...document.querySelectorAll('app-pipeline-track li')].map((li) => ({
-        status: li.className,
-        name: li.querySelector('.name').firstChild.textContent.trim(),
-        time: li.querySelector('.time').textContent.trim(),
-    }))`);
+    await openTrack();
+    const track = await pipelineRows();
     await screenshot('03b-pipeline.png');
     check(
         'pipeline track lists every stage as done with its time',
@@ -253,6 +307,14 @@ try {
             track.every((row) => row.status === 'done' && /\d s$|\d:\d\d$/.test(row.time)),
         track.map((row) => `${row.name} ${row.time}`).join(' · ') +
             ` · total ${await text('app-pipeline-track .total')}`,
+    );
+    const method = (stage) => track.find((row) => row.name === stage)?.method ?? '';
+    check(
+        'High shows its methods: SIFT bundle, 1.5× stereo, confidence-weighted TSDF',
+        /SIFT/.test(method('Bundle adjustment')) &&
+            /1\.5×/.test(method('Dense stereo')) &&
+            /confidence/.test(method('Meshing')),
+        track.map((row) => `${row.name}: ${row.method}`).join(' | '),
     );
     await click('app-pipeline-track .head');
     const errorToast = await text('app-model-viewer .toast');
@@ -328,17 +390,8 @@ try {
 
     if (exports['.glb']) {
         const glb = parseGlb(exports['.glb']);
-        const errors = [];
-        for (let i = 0; i < glb.positions.length; i += 3 * 3) {
-            errors.push(
-                scene.surfaceDistance([
-                    glb.positions[i],
-                    glb.positions[i + 1],
-                    glb.positions[i + 2],
-                ]),
-            );
-        }
-        const uvOk = glb.uvs.every((v) => v >= 0 && v <= 1);
+        const errors = meshErrors(glb);
+        const uvOk = !!glb.uvs && glb.uvs.every((v) => v >= 0 && v <= 1);
         check(
             'exported mesh matches the true scene',
             percentile(errors, 0.5) < 0.002 &&
@@ -354,6 +407,51 @@ try {
             'metrics JSON is complete',
             metrics.keyframes > 0 && metrics.densePoints > 0 && metrics.timings.length >= 5,
             `${metrics.keyframes} keyframes, ${metrics.sparsePoints} sparse, ${metrics.densePoints} dense, voxel ${(metrics.voxel * 1000).toFixed(2)} mm, timings ${metrics.timings.map((t) => `${t.name} ${(t.ms / 1000).toFixed(1)}s`).join(', ')}`,
+        );
+    }
+
+    // Rebuild the same capture at the other levels from the pipeline card.
+    await click('app-export-sheet .round-action.close');
+    for (const [label, limit, textured] of [
+        ['Medium', 0.002, true],
+        ['Low', 0.003, false],
+    ]) {
+        await openTrack();
+        await evaluate(
+            `[...document.querySelectorAll('app-pipeline-track .rebuild button')].find((b) => b.textContent.trim() === '${label}')?.click()`,
+        );
+        const rebuildStart = Date.now();
+        const rebuilt = await until(
+            `document.querySelector('app-pipeline-track .head .quality')?.textContent.trim() === '${label}' && !document.querySelector('app-pipeline-track .head .spinner') && !document.querySelector('app-model-viewer button.save')?.disabled`,
+            BUILD_TIMEOUT_MS,
+            500,
+        );
+        await openTrack();
+        const rows = await pipelineRows();
+        await screenshot(`09-rebuild-${label.toLowerCase()}.png`);
+        const texture = rows.find((row) => row.name === 'Texture')?.method ?? '';
+        check(
+            `rebuild at ${label} finishes with its own methods`,
+            !!rebuilt &&
+                rows.every((row) => row.status === 'done') &&
+                (textured ? /atlas/.test(texture) : /vertex colours/.test(texture)),
+            `${((Date.now() - rebuildStart) / 1000).toFixed(0)} s; ${rows.map((row) => `${row.name} ${row.time}`).join(' · ')}; texture: ${texture}`,
+        );
+        await click('app-pipeline-track .head');
+        const path = await exportGlb();
+        if (!path) {
+            check(`${label} GLB downloads`, false, 'no file');
+            continue;
+        }
+        const glb = parseGlb(path);
+        const errors = meshErrors(glb);
+        const appearance = textured
+            ? !!glb.uvs && glb.jpegBytes > 10_000 && !glb.colors
+            : !!glb.colors && !glb.uvs && glb.jpegBytes === 0;
+        check(
+            `${label} GLB matches the true scene`,
+            percentile(errors, 0.5) < limit && appearance,
+            `${glb.indices.length / 3} triangles, error median ${(percentile(errors, 0.5) * 1000).toFixed(2)} mm / p90 ${(percentile(errors, 0.9) * 1000).toFixed(2)} mm, ${textured ? `atlas ${(glb.jpegBytes / 1e6).toFixed(1)} MB` : 'vertex colours'}`,
         );
     }
 

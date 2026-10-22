@@ -56,7 +56,7 @@ export class ModelViewer implements OnDestroy {
     readonly marks = signal<number[][]>([]);
     readonly labelAt = signal<{ x: number; y: number } | null>(null);
 
-    readonly hasMesh = computed(() => this.scan.mesh() !== null || this.scan.textured() !== null);
+    readonly hasMesh = computed(() => this.scan.mesh() !== null || this.scan.model() !== null);
     readonly hasDense = computed(() => this.scan.dense() !== null);
     readonly hasSparse = computed(() => this.scan.sparse() !== null);
     readonly mode = computed<Mode>(() => {
@@ -71,7 +71,7 @@ export class ModelViewer implements OnDestroy {
     readonly summary = computed(() => {
         const mode = this.mode();
         if (mode === 'mesh') {
-            const mesh = this.scan.textured() ?? this.scan.mesh();
+            const mesh = this.scan.model() ?? this.scan.mesh();
             return mesh ? `${formatCount(mesh.indices.length / 3)} triangles` : 'meshing…';
         }
         if (mode === 'dense') {
@@ -116,7 +116,7 @@ export class ModelViewer implements OnDestroy {
             this.scan.sparse();
             this.scan.dense();
             this.scan.mesh();
-            this.scan.textured();
+            this.scan.model();
             this.scan.cameras();
             this.uploadAll();
         });
@@ -134,13 +134,13 @@ export class ModelViewer implements OnDestroy {
         const sparse = this.scan.sparse();
         const dense = this.scan.dense();
         const mesh = this.scan.mesh();
-        const textured = this.scan.textured();
+        const model = this.scan.model();
         const cameras = this.scan.cameras();
         scene.setColored('sparse', sparse && { ...sparse, channels: 3 });
         scene.setColored('dense', dense && { ...dense, channels: 3 });
-        if (textured) {
-            scene.setMesh('mesh', textured.positions, textured.indices, textured.uvs);
-            scene.setAtlas(textured.atlas);
+        if (model) {
+            scene.setMesh('mesh', model.positions, model.indices, model.uvs, model.colors);
+            scene.setAtlas(model.atlas);
         } else if (mesh) {
             scene.setMesh('mesh', mesh.positions, mesh.indices, null);
         } else {
@@ -191,7 +191,7 @@ export class ModelViewer implements OnDestroy {
         const viewProjection = this.camera.viewProjection(aspect);
         const scale = canvas.height / (2 * Math.tan(this.camera.fov / 2));
         const mode = this.mode();
-        if (mode === 'mesh') scene.drawMesh('mesh', viewProjection, this.camera.eye(), true);
+        if (mode === 'mesh') scene.drawMesh('mesh', viewProjection, this.camera.eye());
         else if (mode === 'dense')
             scene.drawPoints('dense', viewProjection, this.extent * 0.005, scale);
         else scene.drawPoints('sparse', viewProjection, this.extent * 0.012, scale);
@@ -237,7 +237,7 @@ export class ModelViewer implements OnDestroy {
 
     reframe(): void {
         const geometry =
-            this.scan.textured() ?? this.scan.mesh() ?? this.scan.dense() ?? this.scan.sparse();
+            this.scan.model() ?? this.scan.mesh() ?? this.scan.dense() ?? this.scan.sparse();
         if (geometry) this.camera.frame(geometry.positions);
         this.requestRender();
     }
@@ -299,7 +299,7 @@ export class ModelViewer implements OnDestroy {
     }
 
     private pick(event: PointerEvent): void {
-        const mesh = this.scan.textured() ?? this.scan.mesh();
+        const mesh = this.scan.model() ?? this.scan.mesh();
         if (!mesh) return;
         const canvas = this.canvas().nativeElement;
         const box = canvas.getBoundingClientRect();

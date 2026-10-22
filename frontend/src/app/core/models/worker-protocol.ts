@@ -1,5 +1,6 @@
 import { Intrinsics } from '../../vision/geometry/camera';
 import { StageEvent } from './pipeline-stages';
+import { Quality } from './quality';
 import { ScanMetrics } from './scan-results';
 
 export type ExportFormat = 'glb' | 'dense' | 'sparse' | 'metrics';
@@ -16,11 +17,13 @@ export interface KeyframeMessage {
     /** WebXR view transform (camera → world, column-major, OpenGL axes). */
     transform: number[];
     depth: { width: number; height: number; meters: ArrayBuffer } | null;
+    /** Tracking segment: increments whenever the phone lost tracking in between. */
+    segment: number;
 }
 
 export type WorkerRequest =
     | { kind: 'keyframe'; frame: KeyframeMessage }
-    | { kind: 'finish' }
+    | { kind: 'finish'; quality: Quality }
     | { kind: 'reset' }
     | { kind: 'export'; format: ExportFormat };
 
@@ -42,11 +45,13 @@ export type WorkerResponse =
     | { kind: 'dense'; positions: ArrayBuffer; colors: ArrayBuffer }
     | { kind: 'mesh'; positions: ArrayBuffer; normals: ArrayBuffer; indices: ArrayBuffer }
     | {
-          kind: 'textured';
+          /** The final model: an atlas (uvs + JPEG) or vertex colours (RGBA8). */
+          kind: 'model';
           positions: ArrayBuffer;
-          uvs: ArrayBuffer;
           indices: ArrayBuffer;
-          atlas: Blob;
+          uvs: ArrayBuffer | null;
+          colors: ArrayBuffer | null;
+          atlas: Blob | null;
       }
     | { kind: 'metrics'; metrics: ScanMetrics }
     | { kind: 'done' }

@@ -8,6 +8,7 @@
             }}</i>
         }
         <span class="title">{{ title() }}</span>
+        <span class="quality">{{ quality().label }}</span>
         <span class="count">{{ done() }}/{{ count() }}</span>
         <b class="total">{{ total() }}</b>
         <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -44,9 +45,12 @@
                     </span>
                     <span class="name">
                         {{ row.label }}
-                        @if (row.status === 'running' || row.note) {
-                            <small>{{ row.note ?? row.detail }}</small>
-                        }
+                        <small
+                            >{{ row.method }}
+                            @if (row.note) {
+                                · <b>{{ row.note }}</b>
+                            }
+                        </small>
                     </span>
                     <span class="time">{{ row.time }}</span>
                     @if (row.status === 'running' && row.fraction >= 0) {
@@ -58,5 +62,20 @@
         <p class="sum">
             processing <b>{{ build() }}</b> · capture + processing <b>{{ total() }}</b>
         </p>
+        @if (canRebuild()) {
+            <div class="rebuild" role="group" aria-label="Rebuild at another quality">
+                <span>Rebuild</span>
+                @for (option of qualities; track option.id) {
+                    <button
+                        type="button"
+                        [class.on]="option.id === quality().id"
+                        [disabled]="option.id === quality().id && !failed()"
+                        (click)="rebuild(option.id)"
+                    >
+                        {{ option.label }}
+                    </button>
+                }
+            </div>
+        }
     }
 </section>

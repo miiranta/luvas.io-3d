@@ -1,4 +1,4 @@
-import { RgbaImage } from '../texture/atlas-baker';
+import { RgbaImage } from '../texture/texture-types';
 import { ImageStore } from './scan-session';
 
 /** Keyframe images kept as JPEG blobs (~10× smaller than RGBA), decoded on demand. */

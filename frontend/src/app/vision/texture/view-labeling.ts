@@ -75,7 +75,13 @@ export function labelFaces(
         }
     }
 
-    // Faces seen by no camera borrow the most common label around them.
+    fillUnseen(labels, adjacency);
+    return labels;
+}
+
+/** Faces seen by no camera (label −1) borrow the most common label around them. */
+export function fillUnseen(labels: Int16Array, adjacency: Int32Array): void {
+    const faces = labels.length;
     for (let round = 0; round < 8; round++) {
         let filled = 0;
         for (let f = 0; f < faces; f++) {
@@ -91,7 +97,6 @@ export function labelFaces(
         }
         if (filled === 0) break;
     }
-    return labels;
 }
 
 /** Re-labels faces of tiny charts to a neighbouring chart's view when that view sees them. */

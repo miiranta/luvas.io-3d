@@ -8,6 +8,7 @@ import {
     signal,
     viewChild,
 } from '@angular/core';
+import { QUALITY, Quality } from '../../core/models/quality';
 import { ScanService } from '../../core/services/scan-service';
 import { XrCapture } from '../../core/services/xr-capture';
 
@@ -58,7 +59,23 @@ export class CaptureStage implements OnInit {
     readonly canStart = computed(
         () => this.ready() && this.xr.supported() === true && !this.blocker() && !this.starting(),
     );
+    readonly qualities = (['low', 'medium', 'high'] as Quality[]).map((id) => QUALITY[id]);
+    readonly quality = this.scan.quality;
+    readonly qualityNote = computed(
+        () =>
+            ({
+                low: 'Fastest: light bundle adjustment, half-resolution stereo, vertex colours.',
+                medium: 'Balanced: bundle adjustment, full-resolution stereo, texture atlas.',
+                high: 'Best: SIFT poses + self-calibration, 1.5× stereo, weighted fusion (slowest).',
+            })[this.quality()],
+    );
+
+    setQuality(quality: Quality): void {
+        this.scan.setQuality(quality);
+    }
+
     readonly hint = computed(() => {
+        if (this.scan.full()) return 'Keyframe budget full — tap the button to build the model.';
         if (this.tracking() === 'lost') return 'Looking for surfaces… move the phone slowly.';
         if (this.tracking() === 'limited')
             return 'Tracking is limited — point at textured surfaces and move slower.';

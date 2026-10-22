@@ -1,18 +1,11 @@
 import { seededRandom } from '../math/dense';
 import { GrayImage, blurGray, resizeGray } from '../image/gray-image';
+import { DescriptorMetric, FeatureSet } from './feature-set';
+import { selectOnGrid } from './grid-selection';
 
-/** Keypoints and 256-bit descriptors of one image, stored as parallel arrays. */
-export interface FeatureSet {
-    count: number;
-    /** Positions in pixels of the full-resolution (level 0) image. */
-    x: Float32Array;
-    y: Float32Array;
-    level: Uint8Array;
-    angle: Float32Array;
-    /** 8 × u32 words per keypoint. */
-    descriptors: Uint32Array;
-}
+export type { FeatureSet } from './feature-set';
 
+/** 256-bit rBRIEF descriptors: 8 × u32 words per keypoint. */
 export const DESCRIPTOR_WORDS = 8;
 
 const LEVELS = 3;
@@ -95,7 +88,13 @@ export function extractFeatures(image: GrayImage, budget: number): FeatureSet {
     levels.forEach((level, l) => {
         const levelBudget = Math.round((budget * areaWeights[l]) / areaTotal);
         const blurred = blurGray(level);
-        const picked = selectOnGrid(detectCorners(level, blurred, levelBudget), level, levelBudget);
+        const picked = selectOnGrid(
+            detectCorners(level, blurred, levelBudget),
+            level.width,
+            level.height,
+            CELL,
+            levelBudget,
+        );
         const scale = Math.pow(LEVEL_SCALE, l);
         for (const { x, y } of picked) {
             const angle = orientation(level, x, y);
@@ -114,6 +113,7 @@ export function extractFeatures(image: GrayImage, budget: number): FeatureSet {
         level: Uint8Array.from(lv),
         angle: Float32Array.from(angles),
         descriptors: Uint32Array.from(words),
+        metric: ORB_METRIC,
     };
 }
 
@@ -204,31 +204,6 @@ function harris(image: GrayImage, x: number, y: number): number {
     return response > 0 ? response : 1e-6;
 }
 
-/** Strongest corners per grid cell first, then the best of the rest, up to the budget. */
-function selectOnGrid(corners: Candidate[], image: GrayImage, budget: number): Candidate[] {
-    corners.sort((a, b) => b.score - a.score);
-    const columns = Math.ceil(image.width / CELL);
-    const rows = Math.ceil(image.height / CELL);
-    const perCell = Math.max(1, Math.ceil((budget / (columns * rows)) * 1.2));
-    const filled = new Uint16Array(columns * rows);
-    const chosen: Candidate[] = [];
-    const rest: Candidate[] = [];
-    for (const corner of corners) {
-        const cell = Math.floor(corner.y / CELL) * columns + Math.floor(corner.x / CELL);
-        if (filled[cell] < perCell && chosen.length < budget) {
-            filled[cell]++;
-            chosen.push(corner);
-        } else {
-            rest.push(corner);
-        }
-    }
-    for (const corner of rest) {
-        if (chosen.length >= budget) break;
-        chosen.push(corner);
-    }
-    return chosen;
-}
-
 /** Intensity-centroid orientation (Rosin) over a circular patch. */
 function orientation(image: GrayImage, x: number, y: number): number {
     const { width, data } = image;
@@ -279,3 +254,11 @@ export function hamming(a: Uint32Array, ia: number, b: Uint32Array, ib: number):
     }
     return distance;
 }
+
+/** Hamming distance on rBRIEF bits; ~72 of 256 is the usual limit for a true match. */
+export const ORB_METRIC: DescriptorMetric = {
+    name: 'orb',
+    words: DESCRIPTOR_WORDS,
+    distance: hamming,
+    maxDistance: 72,
+};

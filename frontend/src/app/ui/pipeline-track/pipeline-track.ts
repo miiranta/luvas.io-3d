@@ -6,12 +6,13 @@ import {
     inject,
     signal,
 } from '@angular/core';
+import { QUALITY, Quality } from '../../core/models/quality';
 import { ScanService, StageState } from '../../core/services/scan-service';
 
 interface Row {
     id: string;
     label: string;
-    detail: string;
+    method: string;
     status: StageState['status'];
     time: string;
     fraction: number;
@@ -71,7 +72,7 @@ export class PipelineTrack {
             return {
                 id: stage.id,
                 label: stage.label,
-                detail: stage.detail,
+                method: stage.method,
                 status: stage.status,
                 time,
                 fraction: stage.fraction,
@@ -89,5 +90,15 @@ export class PipelineTrack {
 
     toggle(): void {
         this.open.update((open) => !open);
+    }
+
+    readonly qualities = (['low', 'medium', 'high'] as Quality[]).map((id) => QUALITY[id]);
+    readonly quality = computed(() => QUALITY[this.scan.builtQuality() ?? this.scan.quality()]);
+    /** A finished (or failed) build can be redone at another quality from the same capture. */
+    readonly canRebuild = computed(() => this.scan.phase() === 'done');
+
+    rebuild(quality: Quality): void {
+        this.open.set(true);
+        this.scan.rebuild(quality);
     }
 }
